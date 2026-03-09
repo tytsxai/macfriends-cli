@@ -1,1 +1,8 @@
 /target
+/.DS_Store
+/.build
+/coverage
+/native/agent/build
+**/.DS_Store
+
+/dist

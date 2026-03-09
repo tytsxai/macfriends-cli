@@ -1,0 +1,887 @@
+use crate::cli::{Cli, Command, ExportArgs, ExportFormat, LaunchArgs, PrepareArgs, ScanArgs};
+use crate::export;
+use crate::layout::AppLayout;
+use crate::model::{
+    AdapterManifest, AgentStatus, Contact, DoctorReport, GenericMessage, LaunchReport, PathStatus,
+    PrepareReport, PrimitiveResolution, Profile, RunState, ScanReport, TargetStatus, ToolReport,
+};
+use crate::{rpc, util};
+use anyhow::{Context, Result, anyhow};
+use chrono::Utc;
+use serde_json::json;
+use std::path::{Path, PathBuf};
+use std::process::{Command as ProcessCommand, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
+
+const DEFAULT_SOURCE_APP: &str = "/Applications/WeChat.app";
+const AGENT_BOOT_TIMEOUT: Duration = Duration::from_secs(10);
+const AGENT_STOP_TIMEOUT: Duration = Duration::from_secs(3);
+const POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+pub fn run(cli: Cli) -> Result<()> {
+    match cli.command {
+        Command::Doctor => doctor(cli.json),
+        Command::Prepare(args) => prepare(cli.json, args),
+        Command::Launch(args) => launch(cli.json, args),
+        Command::Attach => attach(cli.json),
+        Command::Profile => profile(cli.json),
+        Command::Contacts => contacts(cli.json),
+        Command::Scan(args) => scan(cli.json, args),
+        Command::Export(args) => export_results(cli.json, args),
+        Command::Detach => detach(cli.json),
+        Command::Cleanup => cleanup(cli.json),
+    }
+}
+
+fn doctor(json_output: bool) -> Result<()> {
+    let layout = AppLayout::detect()?;
+    let source_app = PathBuf::from(DEFAULT_SOURCE_APP);
+    let adapter = read_adapter_template(&layout)?;
+    let source_status = assess_path(&source_app, &adapter);
+    let managed_status = assess_path(&layout.managed_app, &adapter);
+    let live_status = agent_status_if_running(&layout);
+    let runtime_ready = live_status
+        .as_ref()
+        .is_some_and(|status| status.runtime_ready);
+    let fixture_enabled = live_status
+        .as_ref()
+        .is_some_and(|status| status.fixture_enabled);
+    let primitive_resolution = live_status
+        .as_ref()
+        .and_then(|status| status.primitive_resolution.clone());
+    let release_blockers = collect_release_blockers(&managed_status, live_status.as_ref());
+
+    let report = DoctorReport {
+        os: std::env::consts::OS.to_string(),
+        arch: std::env::consts::ARCH.to_string(),
+        apple_silicon_supported: std::env::consts::ARCH == "aarch64",
+        target_version: adapter.build_target.clone(),
+        installed_wechat_version: source_status.source_version.clone(),
+        managed_wechat_version: managed_status.managed_version.clone(),
+        target_supported: managed_status.target_supported || source_status.target_supported,
+        adapter_name: Some(adapter.adapter_name.clone()),
+        reason: if managed_status.target_supported || source_status.target_supported {
+            None
+        } else {
+            managed_status.reason.clone().or(source_status.reason)
+        },
+        tools: ToolReport {
+            clang: util::command_exists("clang"),
+            codesign: util::command_exists("codesign"),
+            ditto: Path::new("/usr/bin/ditto").exists(),
+            plistbuddy: Path::new("/usr/libexec/PlistBuddy").exists(),
+            make: util::command_exists("make"),
+        },
+        source_app: PathStatus {
+            path: source_app.display().to_string(),
+            exists: source_app.exists(),
+        },
+        managed_app: PathStatus {
+            path: layout.managed_app.display().to_string(),
+            exists: layout.managed_app.exists(),
+        },
+        agent: PathStatus {
+            path: layout.agent_dylib().display().to_string(),
+            exists: layout.agent_dylib().exists(),
+        },
+        adapter_manifest: PathStatus {
+            path: layout.adapter_manifest.display().to_string(),
+            exists: layout.adapter_manifest.exists(),
+        },
+        socket_path: layout.socket_path.display().to_string(),
+        runtime_ready,
+        fixture_enabled,
+        primitive_resolution,
+        release_blockers: release_blockers.clone(),
+        notes: vec![
+            format!("当前唯一受支持的微信版本是 {}。", adapter.build_target),
+            "真实适配必须满足 bundle/version/arch 三项门禁。".into(),
+            "fixture 模式仅用于测试，不属于默认用户路径。".into(),
+        ],
+    };
+    log_command(
+        &layout,
+        "doctor",
+        if release_blockers.is_empty() {
+            "ok"
+        } else {
+            "blocked"
+        },
+        json!({
+            "runtime_ready": report.runtime_ready,
+            "fixture_enabled": report.fixture_enabled,
+            "release_blockers": report.release_blockers,
+        }),
+    );
+    util::print_output(json_output, &report, || {
+        let blockers = format_release_blockers(&report.release_blockers);
+        let primitive = format_primitive_resolution(report.primitive_resolution.as_ref());
+        format!(
+            "MacFriends Doctor\n- OS: {}\n- Arch: {}\n- Installed WeChat: {}\n- Managed WeChat: {}\n- Target Version: {}\n- Target Supported: {}\n- Runtime Ready: {}\n- Fixture Enabled: {}\n- Adapter: {}\n- Reason: {}\n- Primitive Resolution: {}\n- Socket: {}{}",
+            report.os,
+            report.arch,
+            report
+                .installed_wechat_version
+                .clone()
+                .unwrap_or_else(|| "unknown".into()),
+            report
+                .managed_wechat_version
+                .clone()
+                .unwrap_or_else(|| "unknown".into()),
+            report.target_version,
+            yes_no(report.target_supported),
+            yes_no(report.runtime_ready),
+            yes_no(report.fixture_enabled),
+            report.adapter_name.clone().unwrap_or_else(|| "none".into()),
+            report.reason.clone().unwrap_or_default(),
+            primitive,
+            report.socket_path,
+            blockers,
+        )
+    })
+}
+
+fn prepare(json_output: bool, args: PrepareArgs) -> Result<()> {
+    let layout = AppLayout::detect()?;
+    layout.ensure_dirs()?;
+    let source_app = args
+        .source_app
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_SOURCE_APP));
+    if !source_app.exists() {
+        return Err(anyhow!("未找到源 WeChat.app: {}", source_app.display()));
+    }
+
+    ensure_native_assets(&layout)?;
+    util::copy_app_bundle(&source_app, &layout.managed_app, args.force)?;
+    util::copy_file(&layout.bundled_agent_dylib(), &layout.agent_dylib())?;
+    util::copy_file(&layout.bundled_agent_host(), &layout.agent_host())?;
+
+    let adapter = read_adapter_template(&layout)?;
+    util::write_json_file(&layout.adapter_manifest, &adapter)?;
+
+    util::codesign_path(&layout.agent_dylib())?;
+    util::codesign_path(&layout.managed_app)?;
+
+    let managed_status = assess_path(&layout.managed_app, &adapter);
+    util::write_json_file(&layout.target_status, &managed_status)?;
+
+    let mut warnings = vec![];
+    if !managed_status.version_match {
+        warnings.push(format!(
+            "当前受控微信版本为 {:?}，与锁定版本 {} 不一致。",
+            managed_status.managed_version, managed_status.target_version
+        ));
+    }
+    if !managed_status.target_supported {
+        warnings.push(
+            managed_status
+                .reason
+                .clone()
+                .unwrap_or_else(|| "当前目标版本不受支持。".into()),
+        );
+    }
+
+    let mut release_blockers = collect_release_blockers(&managed_status, None);
+    release_blockers.push("尚未启动受控进程并完成真实运行态验证。".into());
+
+    let report = PrepareReport {
+        source_app: source_app.display().to_string(),
+        managed_app: layout.managed_app.display().to_string(),
+        agent_dylib: layout.agent_dylib().display().to_string(),
+        agent_host: layout.agent_host().display().to_string(),
+        source_version: util::plist_value_opt(&source_app, "CFBundleShortVersionString"),
+        managed_version: managed_status.managed_version.clone(),
+        target_version: managed_status.target_version.clone(),
+        bundle_id: managed_status.bundle_id.clone(),
+        arch: managed_status.arch.clone(),
+        signature_status: "ad-hoc-signed".into(),
+        version_match: managed_status.version_match,
+        target_supported: managed_status.target_supported,
+        adapter_name: managed_status.adapter_name.clone(),
+        reason: managed_status.reason.clone(),
+        runtime_ready: false,
+        release_blockers: release_blockers.clone(),
+        warnings,
+    };
+    log_command(
+        &layout,
+        "prepare",
+        if report.target_supported {
+            "ok"
+        } else {
+            "blocked"
+        },
+        json!({
+            "target_supported": report.target_supported,
+            "release_blockers": report.release_blockers,
+        }),
+    );
+    util::print_output(json_output, &report, || {
+        let mut lines = vec![
+            "MacFriends Prepare 完成".to_string(),
+            format!("- Managed App: {}", report.managed_app),
+            format!("- Target Version: {}", report.target_version),
+            format!(
+                "- Bundle ID: {}",
+                report.bundle_id.clone().unwrap_or_default()
+            ),
+            format!("- Arch: {}", report.arch),
+            format!("- Version Match: {}", yes_no(report.version_match)),
+            format!("- Target Supported: {}", yes_no(report.target_supported)),
+            format!("- Runtime Ready: {}", yes_no(report.runtime_ready)),
+            format!("- Signature: {}", report.signature_status),
+        ];
+        lines.extend(
+            report
+                .warnings
+                .iter()
+                .map(|item| format!("- Warning: {item}")),
+        );
+        lines.extend(
+            report
+                .release_blockers
+                .iter()
+                .map(|item| format!("- Release Blocker: {item}")),
+        );
+        lines.join("\n")
+    })
+}
+
+fn launch(json_output: bool, args: LaunchArgs) -> Result<()> {
+    let layout = AppLayout::detect()?;
+    layout.ensure_dirs()?;
+    if !layout.managed_app.exists() {
+        return Err(anyhow!("受控微信副本不存在，请先运行 macfriends prepare"));
+    }
+
+    cleanup_stale_runtime_state(&layout)?;
+    if let Some(run_state) = read_run_state_if_exists(&layout)?
+        && util::pid_is_running(run_state.pid)
+    {
+        return Err(anyhow!(
+            "已有受控进程正在运行，PID={}；请先 detach 或关闭该进程",
+            run_state.pid
+        ));
+    }
+
+    let target_status: TargetStatus =
+        util::read_json_file(&layout.target_status).unwrap_or_else(|_| {
+            assess_path(
+                &layout.managed_app,
+                &read_adapter_template(&layout).unwrap_or_else(|_| default_adapter_manifest()),
+            )
+        });
+    util::remove_file_if_exists(&layout.socket_path)?;
+
+    let executable = util::app_executable(&layout.managed_app)?;
+    let mut command = ProcessCommand::new(executable);
+    command
+        .env_remove("MACFRIENDS_ENABLE_FIXTURE")
+        .env_remove("MACFRIENDS_ADAPTER_TEMPLATE")
+        .env_remove("MACFRIENDS_LOG_FILE")
+        .env("DYLD_INSERT_LIBRARIES", layout.agent_dylib())
+        .env("MACFRIENDS_AGENT_SOCKET", &layout.socket_path)
+        .env("MACFRIENDS_ADAPTER_PATH", &layout.adapter_manifest)
+        .env("MACFRIENDS_LOG_FILE", layout.agent_log_file())
+        .env("MACFRIENDS_LOGIN_MODE", if args.login { "1" } else { "0" })
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let child = command.spawn().context("启动受控微信失败")?;
+
+    let run_state = RunState {
+        pid: child.id(),
+        started_at: Utc::now(),
+        socket_path: layout.socket_path.display().to_string(),
+        adapter_name: target_status.adapter_name.clone(),
+        target_version: target_status.target_version.clone(),
+        agent_attached: true,
+    };
+    util::write_json_file(&layout.run_state, &run_state)?;
+    util::write_bytes_atomic(&layout.pid_file, child.id().to_string().as_bytes())?;
+
+    let status = wait_for_agent_status(&layout, child.id(), AGENT_BOOT_TIMEOUT)?;
+    let release_blockers = collect_release_blockers(&target_status, Some(&status));
+    let message = if release_blockers.is_empty() {
+        format!("已启动受控目标进程，PID={}，运行态 Ready", child.id())
+    } else {
+        format!("已启动受控目标进程，PID={}，但未达到 Ready", child.id())
+    };
+    let report = LaunchReport {
+        pid: child.id(),
+        socket_path: layout.socket_path.display().to_string(),
+        runtime_ready: status.runtime_ready,
+        fixture_enabled: status.fixture_enabled,
+        release_blockers: release_blockers.clone(),
+        message,
+    };
+    log_command(
+        &layout,
+        "launch",
+        if report.runtime_ready {
+            "ok"
+        } else {
+            "blocked"
+        },
+        json!({
+            "pid": report.pid,
+            "runtime_ready": report.runtime_ready,
+            "fixture_enabled": report.fixture_enabled,
+            "release_blockers": report.release_blockers,
+        }),
+    );
+    util::print_output(json_output, &report, || {
+        format!(
+            "{}\n- Socket: {}{}",
+            report.message,
+            report.socket_path,
+            format_release_blockers(&report.release_blockers)
+        )
+    })
+}
+
+fn attach(json_output: bool) -> Result<()> {
+    let layout = AppLayout::detect()?;
+    let status = rpc::ping(&layout.socket_path)?;
+    let target_status =
+        util::read_json_file(&layout.target_status).unwrap_or_else(|_| default_target_status());
+    log_command(
+        &layout,
+        "attach",
+        if status.runtime_ready {
+            "ok"
+        } else {
+            "blocked"
+        },
+        json!({
+            "runtime_ready": status.runtime_ready,
+            "fixture_enabled": status.fixture_enabled,
+            "release_blockers": collect_release_blockers(&target_status, Some(&status)),
+        }),
+    );
+    util::print_output(json_output, &status, || {
+        human_status(&target_status, &status)
+    })
+}
+
+fn profile(json_output: bool) -> Result<()> {
+    let layout = AppLayout::detect()?;
+    let profile: Profile = rpc::call(&layout.socket_path, "profile", json!({}))?;
+    log_command(
+        &layout,
+        "profile",
+        "ok",
+        json!({ "wxid": profile.wxid, "nickname": profile.nickname }),
+    );
+    util::print_output(json_output, &profile, || {
+        format!(
+            "Profile\n- wxid: {}\n- nickname: {}\n- signature: {}",
+            profile.wxid,
+            profile.nickname,
+            profile.signature.clone().unwrap_or_default()
+        )
+    })
+}
+
+fn contacts(json_output: bool) -> Result<()> {
+    let layout = AppLayout::detect()?;
+    let contacts: Vec<Contact> = rpc::call(&layout.socket_path, "contacts", json!({}))?;
+    log_command(
+        &layout,
+        "contacts",
+        "ok",
+        json!({ "records": contacts.len() }),
+    );
+    util::print_output(json_output, &contacts, || {
+        let preview = contacts
+            .iter()
+            .take(5)
+            .map(|item| format!("- {} ({})", item.nickname, item.wxid))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("Contacts: {}\n{}", contacts.len(), preview)
+    })
+}
+
+fn scan(json_output: bool, _args: ScanArgs) -> Result<()> {
+    let layout = AppLayout::detect()?;
+    layout.ensure_dirs()?;
+    let status = rpc::ping(&layout.socket_path)?;
+    let mut report: ScanReport = rpc::call(&layout.socket_path, "scan", json!({ "all": true }))?;
+    report.scanned_at = Utc::now();
+    report.run_id = generate_run_id();
+    report.adapter_name = status
+        .adapter_name
+        .clone()
+        .unwrap_or_else(|| "unknown".into());
+    report.mode = if status.fixture_enabled {
+        "fixture".into()
+    } else {
+        "production".into()
+    };
+
+    let output_path = if report.mode == "production" {
+        let history_path = layout
+            .scan_history_dir()
+            .join(format!("scan-{}.json", report.run_id));
+        util::write_json_file(&history_path, &report)?;
+        util::write_json_file(&layout.latest_scan, &report)?;
+        layout.latest_scan.clone()
+    } else {
+        let fixture_path = layout
+            .fixture_result_dir()
+            .join(format!("fixture-scan-{}.json", report.run_id));
+        util::write_json_file(&fixture_path, &report)?;
+        util::write_json_file(&layout.latest_fixture_scan, &report)?;
+        fixture_path
+    };
+
+    log_command(
+        &layout,
+        "scan",
+        if report.mode == "production" {
+            "ok"
+        } else {
+            "fixture"
+        },
+        json!({
+            "mode": report.mode,
+            "records": report.records.len(),
+            "output": output_path,
+        }),
+    );
+    util::print_output(json_output, &report, || {
+        let summary = report
+            .summary
+            .iter()
+            .map(|(key, value)| format!("- {key}: {value}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            "Scan 完成\n- Mode: {}\n{summary}\n- 保存到: {}",
+            report.mode,
+            output_path.display()
+        )
+    })
+}
+
+fn export_results(json_output: bool, args: ExportArgs) -> Result<()> {
+    let layout = AppLayout::detect()?;
+    let content = std::fs::read(&layout.latest_scan)
+        .with_context(|| format!("未找到生产扫描结果: {}", layout.latest_scan.display()))?;
+    let report: ScanReport = serde_json::from_slice(&content)?;
+    if report.mode != "production" {
+        return Err(anyhow!("最近一次扫描结果不是生产结果，拒绝导出"));
+    }
+    let output = args.output.unwrap_or_else(|| match args.format {
+        ExportFormat::Json => layout.result_dir.join("latest-scan-export.json"),
+        ExportFormat::Csv => layout.result_dir.join("latest-scan-export.csv"),
+    });
+    let export_report = match args.format {
+        ExportFormat::Json => export::write_json(&report, &output)?,
+        ExportFormat::Csv => export::write_csv(&report, &output)?,
+    };
+    log_command(
+        &layout,
+        "export",
+        "ok",
+        json!({
+            "format": export_report.format,
+            "output": export_report.output,
+            "records": export_report.records,
+        }),
+    );
+    util::print_output(json_output, &export_report, || {
+        format!(
+            "Export 完成\n- format: {}\n- output: {}\n- records: {}",
+            export_report.format, export_report.output, export_report.records
+        )
+    })
+}
+
+fn detach(json_output: bool) -> Result<()> {
+    let layout = AppLayout::detect()?;
+    let result: GenericMessage = rpc::call(&layout.socket_path, "stop", json!({}))?;
+    wait_for_socket_stop(&layout, AGENT_STOP_TIMEOUT)?;
+    if let Some(mut run_state) = read_run_state_if_exists(&layout)? {
+        run_state.agent_attached = false;
+        util::write_json_file(&layout.run_state, &run_state)?;
+    }
+    log_command(
+        &layout,
+        "detach",
+        "ok",
+        json!({ "message": result.message }),
+    );
+    util::print_output(json_output, &result, || result.message.clone())
+}
+
+fn cleanup(json_output: bool) -> Result<()> {
+    let layout = AppLayout::detect()?;
+    if let Some(run_state) = read_run_state_if_exists(&layout)?
+        && util::pid_is_running(run_state.pid)
+    {
+        return Err(anyhow!(
+            "受控进程仍在运行，PID={}；请先退出 WeChat 再执行 cleanup",
+            run_state.pid
+        ));
+    }
+    util::remove_file_if_exists(&layout.socket_path)?;
+    util::remove_file_if_exists(&layout.pid_file)?;
+    util::remove_file_if_exists(&layout.run_state)?;
+    let result = GenericMessage {
+        message: format!("已清理运行时文件: {}", layout.runtime_dir.display()),
+    };
+    log_command(
+        &layout,
+        "cleanup",
+        "ok",
+        json!({ "runtime_dir": layout.runtime_dir }),
+    );
+    util::print_output(json_output, &result, || result.message.clone())
+}
+
+fn ensure_native_assets(layout: &AppLayout) -> Result<()> {
+    if layout.bundled_agent_dylib().exists() && layout.bundled_agent_host().exists() {
+        return Ok(());
+    }
+
+    build_native_agent()?;
+    let built_dylib = PathBuf::from("native/agent/build/libmacfriends_agent.dylib");
+    let built_host = PathBuf::from("native/agent/build/macfriends-host");
+    let adapter_template = repo_adapter_template_path()?;
+
+    util::copy_file(&built_dylib, &layout.bundled_agent_dylib())?;
+    util::copy_file(&built_host, &layout.bundled_agent_host())?;
+    util::copy_file(&adapter_template, &layout.bundled_adapter_template())?;
+    Ok(())
+}
+
+fn build_native_agent() -> Result<()> {
+    let status = ProcessCommand::new("make")
+        .arg("artifacts")
+        .arg("-C")
+        .arg("native/agent")
+        .status()
+        .context("执行 native/agent 构建失败")?;
+    if !status.success() {
+        return Err(anyhow!("native agent 构建失败"));
+    }
+    Ok(())
+}
+
+fn read_adapter_template(layout: &AppLayout) -> Result<AdapterManifest> {
+    if let Ok(path) = std::env::var("MACFRIENDS_ADAPTER_TEMPLATE") {
+        let content = std::fs::read_to_string(&path)
+            .with_context(|| format!("无法读取 MACFRIENDS_ADAPTER_TEMPLATE={path}"))?;
+        return Ok(serde_json::from_str(&content)?);
+    }
+
+    let bundled_path = layout.bundled_adapter_template();
+    if bundled_path.exists() {
+        let content = std::fs::read_to_string(&bundled_path)?;
+        return Ok(serde_json::from_str(&content)?);
+    }
+
+    if let Some(exe_dir) = util::current_exe_dir() {
+        let sibling = exe_dir.join("adapter.wechat-macos-arm64.json");
+        if sibling.exists() {
+            let content = std::fs::read_to_string(&sibling)?;
+            return Ok(serde_json::from_str(&content)?);
+        }
+    }
+
+    let manifest_path = repo_adapter_template_path()?;
+    let content = std::fs::read_to_string(&manifest_path)
+        .with_context(|| format!("缺少 adapter 模板 {}", manifest_path.display()))?;
+    Ok(serde_json::from_str(&content)?)
+}
+
+fn repo_adapter_template_path() -> Result<PathBuf> {
+    Ok(PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("fixtures")
+        .join("adapter.wechat-macos-arm64.json"))
+}
+
+fn assess_path(app_bundle: &Path, adapter: &AdapterManifest) -> TargetStatus {
+    let bundle_id = util::plist_value_opt(app_bundle, "CFBundleIdentifier");
+    let version = util::plist_value_opt(app_bundle, "CFBundleShortVersionString");
+    let arches = util::app_arches(app_bundle).unwrap_or_default();
+    let arch_match = arches.iter().any(|item| item == &adapter.arch);
+    let bundle_match = bundle_id.as_deref() == Some(adapter.bundle_id.as_str());
+    let version_match = version.as_deref() == Some(adapter.build_target.as_str());
+    let target_supported = bundle_match && version_match && arch_match;
+    let reason = if !app_bundle.exists() {
+        Some("managed_app_missing".into())
+    } else if !bundle_match || !version_match {
+        Some("version_mismatch".into())
+    } else if !arch_match {
+        Some("arch_mismatch".into())
+    } else {
+        None
+    };
+    TargetStatus {
+        target_version: adapter.build_target.clone(),
+        bundle_id,
+        source_version: version.clone(),
+        managed_version: version,
+        arch: if arch_match {
+            adapter.arch.clone()
+        } else {
+            arches.join(",")
+        },
+        version_match,
+        target_supported,
+        adapter_name: adapter.adapter_name.clone(),
+        reason,
+    }
+}
+
+fn human_status(target_status: &TargetStatus, status: &AgentStatus) -> String {
+    format!(
+        "Agent 已连接\n- mode: {}\n- adapter_loaded: {}\n- target_supported: {}\n- runtime_ready: {}\n- fixture_enabled: {}\n- adapter_name: {}\n- reason: {}\n- primitive_resolution: {}\n- bundle_id: {}\n- bundle_version: {}{}",
+        status.mode,
+        yes_no(status.adapter_loaded),
+        yes_no(status.target_supported),
+        yes_no(status.runtime_ready),
+        yes_no(status.fixture_enabled),
+        status.adapter_name.clone().unwrap_or_default(),
+        status.reason.clone().unwrap_or_default(),
+        format_primitive_resolution(status.primitive_resolution.as_ref()),
+        status.bundle_id.clone().unwrap_or_default(),
+        status.bundle_version.clone().unwrap_or_default(),
+        format_release_blockers(&collect_release_blockers(target_status, Some(status))),
+    )
+}
+
+fn yes_no(flag: bool) -> &'static str {
+    if flag { "yes" } else { "no" }
+}
+
+fn collect_release_blockers(
+    target_status: &TargetStatus,
+    agent_status: Option<&AgentStatus>,
+) -> Vec<String> {
+    let mut blockers = Vec::new();
+    if !target_status.target_supported {
+        blockers.push(format!(
+            "受控目标不受支持：{}",
+            target_status
+                .reason
+                .clone()
+                .unwrap_or_else(|| "version_mismatch".into())
+        ));
+    }
+    match agent_status {
+        None => blockers.push("agent 未运行，无法验证真实运行态。".into()),
+        Some(status) => {
+            if status.fixture_enabled {
+                blockers.push("当前运行在 fixture 模式，结果不能视为生产结果。".into());
+            }
+            if !status.runtime_ready {
+                blockers.push("agent 运行态未 Ready。".into());
+            }
+            if let Some(reason) = &status.reason
+                && !reason.is_empty()
+            {
+                blockers.push(format!("agent 返回阻塞原因：{reason}"));
+            }
+            blockers.extend(primitive_blockers(status.primitive_resolution.as_ref()));
+        }
+    }
+    blockers.sort();
+    blockers.dedup();
+    blockers
+}
+
+fn primitive_blockers(resolution: Option<&PrimitiveResolution>) -> Vec<String> {
+    let Some(resolution) = resolution else {
+        return vec!["缺少原语解析状态，无法判定是否可上线。".into()];
+    };
+    let mut blockers = Vec::new();
+    for (name, state) in [
+        ("profile", resolution.profile.as_str()),
+        ("contacts", resolution.contacts.as_str()),
+        ("scan", resolution.scan.as_str()),
+    ] {
+        if state != "resolved" {
+            blockers.push(format!("关键原语 {name} 未就绪：{state}"));
+        }
+    }
+    blockers
+}
+
+fn format_release_blockers(blockers: &[String]) -> String {
+    if blockers.is_empty() {
+        String::new()
+    } else {
+        blockers
+            .iter()
+            .map(|item| format!("\n- Release Blocker: {item}"))
+            .collect::<String>()
+    }
+}
+
+fn format_primitive_resolution(resolution: Option<&PrimitiveResolution>) -> String {
+    resolution
+        .map(|item| {
+            format!(
+                "profile={}, contacts={}, scan={}",
+                item.profile, item.contacts, item.scan
+            )
+        })
+        .unwrap_or_else(|| "unknown".into())
+}
+
+fn generate_run_id() -> String {
+    format!("run-{}", Utc::now().format("%Y%m%dT%H%M%S%.3fZ"))
+}
+
+fn wait_for_agent_status(layout: &AppLayout, pid: u32, timeout: Duration) -> Result<AgentStatus> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if !util::pid_is_running(pid) {
+            return Err(anyhow!("受控进程已退出，agent 启动失败"));
+        }
+        if layout.socket_path.exists()
+            && let Ok(status) = rpc::ping(&layout.socket_path)
+        {
+            return Ok(status);
+        }
+        if Instant::now() >= deadline {
+            return Err(anyhow!(
+                "等待 agent socket 就绪超时: {}",
+                layout.socket_path.display()
+            ));
+        }
+        thread::sleep(POLL_INTERVAL);
+    }
+}
+
+fn wait_for_socket_stop(layout: &AppLayout, timeout: Duration) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if !layout.socket_path.exists() {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(anyhow!("等待 agent 停止超时"));
+        }
+        thread::sleep(POLL_INTERVAL);
+    }
+}
+
+fn read_run_state_if_exists(layout: &AppLayout) -> Result<Option<RunState>> {
+    if !layout.run_state.exists() {
+        return Ok(None);
+    }
+    Ok(Some(util::read_json_file(&layout.run_state)?))
+}
+
+fn cleanup_stale_runtime_state(layout: &AppLayout) -> Result<()> {
+    if let Some(run_state) = read_run_state_if_exists(layout)?
+        && !util::pid_is_running(run_state.pid)
+    {
+        util::remove_file_if_exists(&layout.run_state)?;
+        util::remove_file_if_exists(&layout.pid_file)?;
+        util::remove_file_if_exists(&layout.socket_path)?;
+    }
+    Ok(())
+}
+
+fn agent_status_if_running(layout: &AppLayout) -> Option<AgentStatus> {
+    if !layout.socket_path.exists() {
+        return None;
+    }
+    rpc::ping(&layout.socket_path).ok()
+}
+
+fn default_adapter_manifest() -> AdapterManifest {
+    AdapterManifest {
+        bundle_id: "com.tencent.xinWeChat".into(),
+        bundle_version: "4.1.8".into(),
+        build_target: "4.1.8".into(),
+        arch: "arm64".into(),
+        resolver_mode: "signature_scan".into(),
+        executable_name: "WeChat".into(),
+        adapter_name: "wechat_4_1_8_arm64".into(),
+        scan_status_codes: Default::default(),
+    }
+}
+
+fn default_target_status() -> TargetStatus {
+    let adapter = default_adapter_manifest();
+    TargetStatus {
+        target_version: adapter.build_target,
+        bundle_id: None,
+        source_version: None,
+        managed_version: None,
+        arch: adapter.arch,
+        version_match: false,
+        target_supported: false,
+        adapter_name: adapter.adapter_name,
+        reason: Some("target_status_missing".into()),
+    }
+}
+
+fn log_command(layout: &AppLayout, command: &str, status: &str, detail: serde_json::Value) {
+    let _ = util::log_command_event(&layout.cli_log_file(), command, status, detail);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adapter_template_is_valid() {
+        let layout = AppLayout::detect().unwrap();
+        let adapter = read_adapter_template(&layout).unwrap();
+        assert_eq!(adapter.bundle_id, "com.tencent.xinWeChat");
+        assert_eq!(adapter.build_target, "4.1.8");
+        assert_eq!(adapter.arch, "arm64");
+    }
+
+    #[test]
+    fn assess_path_flags_version_mismatch() {
+        let adapter = default_adapter_manifest();
+        let status = assess_path(Path::new("/definitely/missing/WeChat.app"), &adapter);
+        assert!(!status.target_supported);
+        assert_eq!(status.reason.as_deref(), Some("managed_app_missing"));
+    }
+
+    #[test]
+    fn fixture_mode_is_a_release_blocker() {
+        let target_status = TargetStatus {
+            target_version: "4.1.8".into(),
+            bundle_id: Some("com.tencent.xinWeChat".into()),
+            source_version: Some("4.1.8".into()),
+            managed_version: Some("4.1.8".into()),
+            arch: "arm64".into(),
+            version_match: true,
+            target_supported: true,
+            adapter_name: "wechat_4_1_8_arm64".into(),
+            reason: None,
+        };
+        let agent_status = AgentStatus {
+            connected: true,
+            mode: "single-version-adapter".into(),
+            bundle_id: Some("com.tencent.xinWeChat".into()),
+            bundle_version: Some("4.1.8".into()),
+            adapter_loaded: true,
+            target_supported: true,
+            adapter_name: Some("wechat_4_1_8_arm64".into()),
+            reason: None,
+            runtime_ready: false,
+            fixture_enabled: true,
+            primitive_resolution: Some(PrimitiveResolution {
+                profile: "fixture".into(),
+                contacts: "fixture".into(),
+                scan: "fixture".into(),
+            }),
+        };
+        let blockers = collect_release_blockers(&target_status, Some(&agent_status));
+        assert!(blockers.iter().any(|item| item.contains("fixture 模式")));
+    }
+}

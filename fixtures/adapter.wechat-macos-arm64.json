@@ -1,0 +1,15 @@
+{
+  "bundle_id": "com.tencent.xinWeChat",
+  "bundle_version": "4.1.8",
+  "build_target": "4.1.8",
+  "arch": "arm64",
+  "resolver_mode": "signature_scan",
+  "executable_name": "WeChat",
+  "adapter_name": "wechat_4_1_8_arm64",
+  "scan_status_codes": {
+    "0xB1": "normal",
+    "0xB2": "deleted",
+    "0xB3": "blocked",
+    "0x00": "unknown"
+  }
+}

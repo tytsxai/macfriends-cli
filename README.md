@@ -1,53 +1,120 @@
-## WeFriends V0.1.0暂时可以使用，但不会继续更新，感谢大家的支持
+# MacFriends
 
-<h2 align="center">WeFriends</h2>
-<h4 align="center">Are we still friends?</h4>
+MacFriends 是一个**面向 Apple Silicon 的 macOS 微信好友关系检测 CLI 新仓库**。
 
----
+它与旧的 Windows 注入式项目完全分离：
+- 新名称、新文档、新目录结构
+- Rust CLI + Objective-C++ agent
+- 只面向 macOS / Apple Silicon / 锁定微信 4.1.8
+- 不做 App Store 分发，不依赖云端服务
 
-WeFriends是一个**开源、免费、安全的微信好友检测工具**，快去看看有没有朋友偷偷删掉或者拉黑你
+## 当前状态
 
----
+本仓库已经提供：
+- 完整 CLI：`doctor` / `prepare` / `launch` / `attach` / `profile` / `contacts` / `scan` / `export` / `detach` / `cleanup`
+- 单版本 adapter manifest：`WeChat 4.1.8 + arm64 + signature_scan`
+- 受控副本准备、ad-hoc 签名、Unix Domain Socket IPC、结果导出
+- 版本门禁、target status 持久化、运行态 Ready 门禁、固定错误码
+- 本地安装脚本、回滚备份位与发布打包脚本
 
-> [!NOTE]
->
-> WeFriends仍处于beta版本阶段,可能出现问题,报告问题请到issues
+**注意：**
+当前仓库已将主流程收敛到 `WeChat 4.1.8 (arm64)`，并实现了 adapter registry 与门禁。
 
+只有当 `doctor --json` 或 `attach --json` 同时满足 `runtime_ready=true`、`fixture_enabled=false`、`release_blockers=[]` 时，才可视为达到生产 Ready。
 
+若目标不满足 bundle/version/arch 条件，命令会明确失败，错误码固定为：
+- `version_mismatch`
+- `adapter_not_loaded`
+- `resolver_validation_failed`
+- `profile_primitive_unresolved`
+- `contacts_primitive_unresolved`
+- `scan_primitive_unresolved`
+- `rpc_timeout`
 
-### 为什么选择WeFriends?
+## 目录
 
-WeFriends具有以下优点:
-- 免费使用,无需购买
-- **好友不会收到任何提示**
-- 代码全部开源,安全可控
-- 所有数据本地处理,不会上传您的隐私
-- 检测速度快,支持不限量好友
-- 基于微信pc hook,封号概率低
+- `crates/cli`：命令行、配置、导出、IPC 客户端
+- `native/agent`：macOS agent 动态库、受控宿主、版本 adapter
+- `docs`：架构、兼容性、排障、安装文档
+- `fixtures`：锁定版本 adapter 模板
+- `scripts`：安装与打包脚本
 
-### 使用指南
+## 快速开始
 
-1. 从Releases下载最新版本(或者自行编译 查看方法)
-2. 解压后阅读txt文档里的说明操作,也要阅读软件内对话框里的提示
+```bash
+cargo build
+make -C native/agent artifacts
+cargo run -p macfriends -- doctor
+cargo run -p macfriends -- prepare
+cargo run -p macfriends -- launch --login
+cargo run -p macfriends -- attach
+```
 
-### 软件截图
+## 安装与发布
 
-![主界面](https://we.freespace.host/WFmainUI.png)
+```bash
+make install-local
+make package
+```
 
-主界面
+详细说明见 `docs/install.md`。
 
-### 软件原理
+## 命令
 
-WeFriends会向微信客户端进程注入一个dll模块,该模块会在内存特定位置修改微信程序的指令,实现hook操作——调用一个腾讯非开放的接口直接查询好友关系,并拦截接口返回值,其他功能原理也差不多
+```bash
+macfriends doctor
+macfriends prepare [--source-app /Applications/WeChat.app] [--force]
+macfriends launch --login
+macfriends attach
+macfriends profile
+macfriends contacts
+macfriends scan --all
+macfriends export --format json
+macfriends export --format csv
+macfriends detach
+macfriends cleanup
+```
 
-### 开源协议
+## 版本策略
 
-使用**MIT开源许可**,您可以在遵守协议的前提下自由地获取、使用、修改、分发本软件并可用于商业活动
+- 仅支持 `Apple Silicon`
+- 仅支持 `WeChat 4.1.8`
+- 仅支持 `fixtures/adapter.wechat-macos-arm64.json` 中定义的 `arm64 + signature_scan`
+- 若源微信版本与目标不匹配，`prepare` 会记录 `target-status.json`，后续 `attach/profile/contacts/scan` 将明确失败
 
-### 贡献
+## 本地 Smoke Test
 
-问渠那得清如许,为有源头活水来  您可以向本仓库提交PR来贡献代码
+fixture 模式只用于测试和 CI，不属于默认用户路径：
 
-### 感谢
-##### 本项目的所有hook功能均来自大佬ljc545w，没有他的开源项目[ComWeChatRobot](https://github.com/ljc545w/ComWeChatRobot)，就不会有WeFriends工具
+```bash
+make -C native/agent artifacts
+MACFRIENDS_AGENT_SOCKET="$HOME/Library/Application Support/MacFriends/runtime/agent.sock" \
+MACFRIENDS_ADAPTER_PATH="$PWD/fixtures/adapter.wechat-macos-arm64.json" \
+MACFRIENDS_ENABLE_FIXTURE=1 \
+DYLD_INSERT_LIBRARIES="$PWD/native/agent/build/libmacfriends_agent.dylib" \
+"$PWD/native/agent/build/macfriends-host"
+```
 
+另一个终端执行：
+
+```bash
+cargo run -p macfriends -- attach
+cargo run -p macfriends -- profile
+cargo run -p macfriends -- contacts
+cargo run -p macfriends -- scan --all
+```
+
+## 许可
+
+MIT，见 `LICENSE`。
+
+## 生产发布门槛
+
+```bash
+make ready
+cargo run -p macfriends -- doctor --json
+cargo run -p macfriends -- launch --login --json
+cargo run -p macfriends -- attach --json
+```
+
+若 `primitive_resolution` 仍是 `unresolved`，则说明核心真实原语尚未闭环，项目仍不可上线。详细操作见 `docs/operations.md`。
