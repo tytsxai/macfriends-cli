@@ -1,14 +1,15 @@
 # MacFriends
 
-MacFriends 是一个**面向 Apple Silicon 的 macOS 微信好友关系检测 CLI 新仓库**。
+MacFriends 是一个**独立维护的 macOS 微信好友关系检测 CLI 工具**，面向 Apple Silicon，聚焦本地运行、受控启动、结果导出与生产可运维能力。
 
-它与旧的 Windows 注入式项目完全分离：
-- 新名称、新文档、新目录结构
+项目定位：
 - Rust CLI + Objective-C++ agent
-- 只面向 macOS / Apple Silicon / 锁定微信 4.1.8
-- 不做 App Store 分发，不依赖云端服务
+- 仅面向 macOS / Apple Silicon
+- 当前锁定 `WeChat 4.1.8 (arm64)`
+- 本地运行，不依赖云端服务
+- 强调 Ready 门禁、可诊断、可回滚、可维护
 
-## 当前状态
+## 当前能力
 
 本仓库已经提供：
 - 完整 CLI：`doctor` / `prepare` / `launch` / `attach` / `profile` / `contacts` / `scan` / `export` / `detach` / `cleanup`
@@ -17,10 +18,12 @@ MacFriends 是一个**面向 Apple Silicon 的 macOS 微信好友关系检测 CL
 - 版本门禁、target status 持久化、运行态 Ready 门禁、固定错误码
 - 本地安装脚本、回滚备份位与发布打包脚本
 
-**注意：**
-当前仓库已将主流程收敛到 `WeChat 4.1.8 (arm64)`，并实现了 adapter registry 与门禁。
+## 上线判断
 
-只有当 `doctor --json` 或 `attach --json` 同时满足 `runtime_ready=true`、`fixture_enabled=false`、`release_blockers=[]` 时，才可视为达到生产 Ready。
+只有当 `doctor --json` 或 `attach --json` 同时满足以下条件，才可视为达到生产 Ready：
+- `runtime_ready=true`
+- `fixture_enabled=false`
+- `release_blockers=[]`
 
 若目标不满足 bundle/version/arch 条件，命令会明确失败，错误码固定为：
 - `version_mismatch`
@@ -35,7 +38,7 @@ MacFriends 是一个**面向 Apple Silicon 的 macOS 微信好友关系检测 CL
 
 - `crates/cli`：命令行、配置、导出、IPC 客户端
 - `native/agent`：macOS agent 动态库、受控宿主、版本 adapter
-- `docs`：架构、兼容性、排障、安装文档
+- `docs`：架构、兼容性、安装、排障、运维文档
 - `fixtures`：锁定版本 adapter 模板
 - `scripts`：安装与打包脚本
 
@@ -57,7 +60,7 @@ make install-local
 make package
 ```
 
-详细说明见 `docs/install.md`。
+详细说明见 `docs/install.md` 与 `docs/operations.md`。
 
 ## 命令
 
@@ -104,10 +107,6 @@ cargo run -p macfriends -- contacts
 cargo run -p macfriends -- scan --all
 ```
 
-## 许可
-
-MIT，见 `LICENSE`。
-
 ## 生产发布门槛
 
 ```bash
@@ -117,4 +116,8 @@ cargo run -p macfriends -- launch --login --json
 cargo run -p macfriends -- attach --json
 ```
 
-若 `primitive_resolution` 仍是 `unresolved`，则说明核心真实原语尚未闭环，项目仍不可上线。详细操作见 `docs/operations.md`。
+若 `primitive_resolution` 仍是 `unresolved`，则说明核心真实原语尚未闭环，项目仍不可上线。
+
+## 许可
+
+MIT，见 `LICENSE`。

@@ -1,15 +1,22 @@
 # MacFriends
 
-MacFriends is a standalone macOS-first WeChat relationship checking CLI for Apple Silicon.
+MacFriends is an **independently maintained macOS WeChat relationship-checking CLI** for Apple Silicon, focused on local execution, controlled launch, exportable results, and production-grade operational readiness.
 
-This repository is a fresh rewrite with:
-- Rust CLI
-- Objective-C++ preload agent
-- managed WeChat app copy
-- Unix domain socket RPC
-- locked-version adapter model
+Project profile:
+- Rust CLI + Objective-C++ agent
+- macOS / Apple Silicon only
+- currently locked to `WeChat 4.1.8 (arm64)`
+- local-first, no cloud dependency
+- built around readiness gates, diagnostics, rollback, and maintainability
 
-At the current stage, the repository is production-shaped and buildable on macOS, but true relationship detection still requires version-specific reverse-engineering data to be implemented in `native/agent`.
+## Current capabilities
+
+The repository currently provides:
+- a full CLI: `doctor`, `prepare`, `launch`, `attach`, `profile`, `contacts`, `scan`, `export`, `detach`, `cleanup`
+- a single-version adapter manifest for `WeChat 4.1.8 + arm64 + signature_scan`
+- managed app-copy preparation, ad-hoc signing, Unix domain socket IPC, and result export
+- version gating, persisted target status, runtime readiness gates, and stable error codes
+- local install, rollback backup slots, and packaging scripts
 
 ## Production readiness gate
 
@@ -18,4 +25,17 @@ A build is not production-ready unless `doctor --json` or `attach --json` report
 - `fixture_enabled = false`
 - `release_blockers = []`
 
-If `primitive_resolution` is still `unresolved`, the repository remains buildable but is not ready for a real production release.
+If `primitive_resolution` is still `unresolved`, the project remains buildable but is not ready for a real production release.
+
+## Install and operations
+
+```bash
+make install-local
+make package
+```
+
+See `docs/install.md`, `docs/operations.md`, `docs/architecture.md`, and `docs/troubleshooting.md` for the full workflow.
+
+## License
+
+MIT. See `LICENSE`.

@@ -2,7 +2,7 @@
 
 ## 本地安装
 
-在仓库根目录执行：
+在项目根目录执行：
 
 ```bash
 make install-local
@@ -16,7 +16,7 @@ make install-local
 
 ## 打包发布
 
-在仓库根目录执行：
+在项目根目录执行：
 
 ```bash
 make package
@@ -44,7 +44,6 @@ macfriends prepare
 macfriends launch --login
 macfriends attach
 ```
-
 
 ## Ready 校验
 

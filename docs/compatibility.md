@@ -10,7 +10,7 @@
 
 ## 锁定版本
 
-仓库当前唯一受支持的 manifest：
+当前项目唯一受支持的 manifest：
 - `fixtures/adapter.wechat-macos-arm64.json`
 
 当前值：
@@ -21,7 +21,6 @@
 - Adapter Name: `wechat_4_1_8_arm64`
 
 只有当目标微信满足以上条件，agent 才会将该目标视为可支持版本。
-
 
 ## 上线前附加条件
 

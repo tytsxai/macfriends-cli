@@ -10,7 +10,7 @@ macfriends prepare --source-app /path/to/WeChat.app
 
 ## `doctor` 或 `prepare` 显示 `version_mismatch`
 
-当前仓库只支持 `WeChat 4.1.8 (arm64)`。如果你的源 app 不是该版本，CLI 会允许准备受控副本，但会在 `target-status.json` 中记录不匹配状态，后续 `attach/profile/contacts/scan` 默认不可用。
+当前项目只支持 `WeChat 4.1.8 (arm64)`。如果你的源 app 不是该版本，CLI 会允许准备受控副本，但会在 `target-status.json` 中记录不匹配状态，后续 `attach/profile/contacts/scan` 默认不可用。
 
 ## `attach` 连接不到 socket
 
@@ -22,7 +22,6 @@ macfriends prepare --source-app /path/to/WeChat.app
 ## `profile_primitive_unresolved` / `contacts_primitive_unresolved` / `scan_primitive_unresolved`
 
 这表示当前目标已经通过 4.1.8 版本门禁，但具体原语解析链尚未成功建立。CLI 不会回退到伪检测，也不会返回空跑结果。
-
 
 ## Ready 相关故障
 

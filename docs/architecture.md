@@ -8,7 +8,7 @@ MacFriends 由两部分组成：
 
 ## 版本化适配
 
-当前仓库只注册一个 adapter：`wechat_4_1_8_arm64`。
+当前项目只注册一个 adapter：`wechat_4_1_8_arm64`。
 
 agent 内部职责分层：
 - transport：socket 建连、请求读取、响应写回
@@ -25,16 +25,16 @@ agent 内部职责分层：
 5. agent 在构造函数里启动 Unix Domain Socket 服务
 6. CLI 通过 JSON RPC 调用 `status/profile/contacts/scan/stop`
 
-## 当前真实适配边界
+## 当前适配边界
 
 当前已完成：
 - 单版本 manifest 门禁
 - adapter 注册与分发
 - 固定错误码
 - fixture 测试链路
+- 运行态 Ready 门禁
 
-当前未在仓库中落地的部分，是特定微信版本内部私有原语的解析与调用逻辑；因此当目标满足 4.1.8 条件但原语未解析时，agent 会返回 `profile_primitive_unresolved` / `contacts_primitive_unresolved` / `scan_primitive_unresolved`。
-
+当前尚未落地的部分，是特定微信版本内部私有原语的解析与调用逻辑；因此当目标满足 4.1.8 条件但原语未解析时，agent 会返回 `profile_primitive_unresolved` / `contacts_primitive_unresolved` / `scan_primitive_unresolved`。
 
 ## 运行态 Ready 门禁
 
