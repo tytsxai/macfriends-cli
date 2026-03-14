@@ -1,7 +1,10 @@
 #import "adapter.hpp"
 #import <Foundation/Foundation.h>
+#import <objc/runtime.h>
+#include <errno.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <string.h>
 #include <unistd.h>
 #include <thread>
 #include <atomic>
@@ -9,6 +12,29 @@
 static std::atomic<bool> g_running(false);
 static int g_server_fd = -1;
 static char g_socket_path[104] = {0};
+static const NSUInteger kMaxRequestBytes = 64 * 1024;
+static const unsigned long long kMaxLogBytes = 10ULL * 1024ULL * 1024ULL;
+static const NSUInteger kDebugClassLimit = 40;
+static const unsigned int kDebugMethodLimit = 30;
+
+static bool writeAll(int fd, const void *buffer, size_t size) {
+    const char *cursor = static_cast<const char *>(buffer);
+    size_t total = 0;
+    while (total < size) {
+        ssize_t written = write(fd, cursor + total, size - total);
+        if (written < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return false;
+        }
+        if (written == 0) {
+            return false;
+        }
+        total += static_cast<size_t>(written);
+    }
+    return true;
+}
 
 static void logLine(NSString *message) {
     const char *logPath = getenv("MACFRIENDS_LOG_FILE");
@@ -22,6 +48,13 @@ static void logLine(NSString *message) {
     NSString *directory = [path stringByDeletingLastPathComponent];
     if (directory.length > 0) {
         [manager createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:nil error:nil];
+    }
+    NSDictionary *attributes = [manager attributesOfItemAtPath:path error:nil];
+    NSNumber *fileSize = attributes[NSFileSize];
+    if (fileSize && fileSize.unsignedLongLongValue >= kMaxLogBytes) {
+        NSString *backupPath = [path stringByAppendingString:@".1"];
+        [manager removeItemAtPath:backupPath error:nil];
+        [manager moveItemAtPath:path toPath:backupPath error:nil];
     }
     if (![manager fileExistsAtPath:path]) {
         [data writeToFile:path atomically:YES];
@@ -39,6 +72,124 @@ static void logLine(NSString *message) {
     } @finally {
         [handle closeFile];
     }
+}
+
+static void logErrno(NSString *prefix) {
+    NSString *detail = [NSString stringWithUTF8String:strerror(errno)];
+    logLine([NSString stringWithFormat:@"%@: %@", prefix ?: @"error", detail ?: @"unknown"]);
+}
+
+static bool ensureSocketDirectory(void) {
+    NSString *path = [NSString stringWithUTF8String:g_socket_path];
+    if (!path || path.length == 0) {
+        return false;
+    }
+    NSString *directory = [path stringByDeletingLastPathComponent];
+    if (directory.length == 0) {
+        return true;
+    }
+    NSError *error = nil;
+    BOOL ok = [[NSFileManager defaultManager] createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:nil error:&error];
+    if (!ok) {
+        logLine([NSString stringWithFormat:@"socket directory create failed: %@", error.localizedDescription ?: @"unknown"]);
+    }
+    return ok;
+}
+
+static void debugDumpRuntimeMatches(void) {
+    const char *filterEnv = getenv("MACFRIENDS_DEBUG_CLASS_FILTER");
+    if (!filterEnv || filterEnv[0] == '\0') {
+        return;
+    }
+
+    NSString *filter = [[NSString stringWithUTF8String:filterEnv] lowercaseString];
+    int classCount = objc_getClassList(nullptr, 0);
+    if (classCount <= 0) {
+        logLine(@"debug runtime dump: no objc classes");
+        return;
+    }
+
+    NSMutableArray *classes = [NSMutableArray arrayWithCapacity:(NSUInteger)classCount];
+    Class *buffer = static_cast<Class *>(calloc((size_t)classCount, sizeof(Class)));
+    if (!buffer) {
+        logLine(@"debug runtime dump: class buffer alloc failed");
+        return;
+    }
+
+    classCount = objc_getClassList(buffer, classCount);
+    for (int index = 0; index < classCount; ++index) {
+        Class candidate = buffer[index];
+        if (!candidate) {
+            continue;
+        }
+        NSString *name = [NSString stringWithUTF8String:class_getName(candidate)];
+        if (!name || ![[name lowercaseString] containsString:filter]) {
+            continue;
+        }
+        [classes addObject:name];
+    }
+    free(buffer);
+
+    [classes sortUsingSelector:@selector(compare:)];
+    NSUInteger logged = 0;
+    for (NSString *className in classes) {
+        if (logged >= kDebugClassLimit) {
+            logLine([NSString stringWithFormat:@"debug runtime dump truncated at %lu classes", (unsigned long)kDebugClassLimit]);
+            break;
+        }
+        Class cls = NSClassFromString(className);
+        if (!cls) {
+            continue;
+        }
+
+        logLine([NSString stringWithFormat:@"debug class %@", className]);
+
+        unsigned int methodCount = 0;
+        Method *methods = class_copyMethodList(cls, &methodCount);
+        for (unsigned int methodIndex = 0; methods && methodIndex < methodCount && methodIndex < kDebugMethodLimit; ++methodIndex) {
+            SEL selector = method_getName(methods[methodIndex]);
+            logLine([NSString stringWithFormat:@"debug method -[%@ %s]", className, sel_getName(selector)]);
+        }
+        if (methods) {
+            free(methods);
+        }
+
+        unsigned int classMethodCount = 0;
+        Method *classMethods = class_copyMethodList(object_getClass(cls), &classMethodCount);
+        for (unsigned int methodIndex = 0; classMethods && methodIndex < classMethodCount && methodIndex < kDebugMethodLimit; ++methodIndex) {
+            SEL selector = method_getName(classMethods[methodIndex]);
+            logLine([NSString stringWithFormat:@"debug method +[%@ %s]", className, sel_getName(selector)]);
+        }
+        if (classMethods) {
+            free(classMethods);
+        }
+
+        logged += 1;
+    }
+}
+
+static bool shouldStartAgentServer(NSDictionary *adapterManifest) {
+    NSDictionary *status = MFBuildAdapterStatus(adapterManifest);
+    BOOL fixtureEnabled = [status[@"fixture_enabled"] boolValue];
+    BOOL targetSupported = [status[@"target_supported"] boolValue];
+    NSString *bundleId = status[@"bundle_id"] == [NSNull null] ? @"<nil>" : status[@"bundle_id"];
+    NSString *bundleVersion = status[@"bundle_version"] == [NSNull null] ? @"<nil>" : status[@"bundle_version"];
+    NSString *reason = status[@"reason"] == [NSNull null] ? @"" : status[@"reason"];
+
+    if (fixtureEnabled || targetSupported) {
+        logLine([NSString stringWithFormat:@"agent activate bundle=%@ version=%@ fixture=%@ target_supported=%@",
+                 bundleId,
+                 bundleVersion,
+                 fixtureEnabled ? @"1" : @"0",
+                 targetSupported ? @"1" : @"0"]);
+        return true;
+    }
+
+    logLine([NSString stringWithFormat:@"agent skip bundle=%@ version=%@ reason=%@",
+             bundleId,
+             bundleVersion,
+             reason.length > 0 ? reason : @"unsupported_process"]);
+    return false;
 }
 
 static NSData *jsonData(id object) {
@@ -91,7 +242,9 @@ static NSDictionary *dispatchRequest(NSDictionary *request) {
 
 static void respond(int client_fd, NSDictionary *response) {
     NSData *data = jsonData(response);
-    write(client_fd, data.bytes, data.length);
+    if (!writeAll(client_fd, data.bytes, data.length)) {
+        logLine(@"socket write failed");
+    }
 }
 
 static void requestServerStop(void) {
@@ -105,24 +258,32 @@ static void requestServerStop(void) {
 
 static void serverLoop() {
     unlink(g_socket_path);
+    if (!ensureSocketDirectory()) {
+        return;
+    }
     g_server_fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (g_server_fd < 0) {
-        logLine(@"socket create failed");
+        logErrno(@"socket create failed");
         return;
     }
 
     sockaddr_un addr {};
     addr.sun_family = AF_UNIX;
-    strlcpy(addr.sun_path, g_socket_path, sizeof(addr.sun_path));
+    if (strlcpy(addr.sun_path, g_socket_path, sizeof(addr.sun_path)) >= sizeof(addr.sun_path)) {
+        logLine(@"socket path too long for sockaddr_un");
+        close(g_server_fd);
+        g_server_fd = -1;
+        return;
+    }
 
     if (bind(g_server_fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0) {
-        logLine(@"socket bind failed");
+        logErrno(@"socket bind failed");
         close(g_server_fd);
         g_server_fd = -1;
         return;
     }
     if (listen(g_server_fd, 5) != 0) {
-        logLine(@"socket listen failed");
+        logErrno(@"socket listen failed");
         close(g_server_fd);
         g_server_fd = -1;
         return;
@@ -143,9 +304,19 @@ static void serverLoop() {
         ssize_t read_len = 0;
         while ((read_len = read(client_fd, chunk, sizeof(chunk))) > 0) {
             [buffer appendBytes:chunk length:(NSUInteger)read_len];
+            if (buffer.length > kMaxRequestBytes) {
+                logLine(@"request_too_large");
+                respond(client_fd, @{ @"id": @"agent", @"ok": @NO, @"error": @"request_too_large" });
+                close(client_fd);
+                client_fd = -1;
+                break;
+            }
             if (memchr(chunk, '\n', (size_t)read_len) != nullptr) {
                 break;
             }
+        }
+        if (client_fd < 0) {
+            continue;
         }
         NSString *line = [[NSString alloc] initWithData:buffer encoding:NSUTF8StringEncoding];
         NSDictionary *request = parseLine(std::string([[line stringByTrimmingCharactersInSet:[NSCharacterSet newlineCharacterSet]] UTF8String] ?: ""));
@@ -180,12 +351,22 @@ __attribute__((constructor)) static void macfriends_agent_init() {
             logLine(@"MACFRIENDS_AGENT_SOCKET missing");
             return;
         }
-        strlcpy(g_socket_path, socketEnv, sizeof(g_socket_path));
-        if (g_socket_path[0] == '\0') {
+        size_t socketPathLen = strnlen(socketEnv, sizeof(g_socket_path));
+        if (socketPathLen == 0) {
             logLine(@"socket path empty");
             return;
         }
+        if (socketPathLen >= sizeof(g_socket_path)) {
+            logLine(@"socket path too long");
+            return;
+        }
+        NSDictionary *adapterManifest = loadAdapter();
+        if (!shouldStartAgentServer(adapterManifest)) {
+            return;
+        }
+        strlcpy(g_socket_path, socketEnv, sizeof(g_socket_path));
         logLine([NSString stringWithFormat:@"agent init path=%s", g_socket_path]);
+        debugDumpRuntimeMatches();
         std::thread(serverLoop).detach();
     }
 }

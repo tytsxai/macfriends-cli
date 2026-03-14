@@ -129,12 +129,17 @@ pub struct FriendRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanReport {
+    #[serde(default)]
     pub mode: String,
+    #[serde(default)]
     pub run_id: String,
+    #[serde(default)]
     pub adapter_name: String,
     pub source_version: String,
     pub scanned_at: DateTime<Utc>,
+    #[serde(default)]
     pub records: Vec<FriendRecord>,
+    #[serde(default)]
     pub summary: BTreeMap<String, usize>,
 }
 
@@ -173,6 +178,8 @@ pub struct TargetStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunState {
     pub pid: u32,
+    #[serde(default)]
+    pub runtime_pid: Option<u32>,
     pub started_at: DateTime<Utc>,
     pub socket_path: String,
     pub adapter_name: String,
@@ -183,6 +190,8 @@ pub struct RunState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LaunchReport {
     pub pid: u32,
+    #[serde(default)]
+    pub runtime_pid: Option<u32>,
     pub socket_path: String,
     pub runtime_ready: bool,
     pub fixture_enabled: bool,

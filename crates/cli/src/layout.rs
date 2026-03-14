@@ -1,3 +1,4 @@
+use crate::util;
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 
@@ -7,6 +8,7 @@ pub struct AppLayout {
     pub runtime_dir: PathBuf,
     pub result_dir: PathBuf,
     pub log_dir: PathBuf,
+    pub ipc_dir: PathBuf,
     pub bundle_dir: PathBuf,
     pub bundle_bin_dir: PathBuf,
     pub managed_app: PathBuf,
@@ -27,12 +29,21 @@ impl AppLayout {
         let runtime_dir = root.join("runtime");
         let result_dir = root.join("results");
         let log_dir = root.join("logs");
+        let default_ipc_dir =
+            PathBuf::from("/tmp").join(format!("macfriends-{}", current_user_label()));
+        let socket_path = std::env::var_os("MACFRIENDS_AGENT_SOCKET")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| default_ipc_dir.join("agent.sock"));
+        let ipc_dir = socket_path
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or(default_ipc_dir);
         let bundle_dir = root.join("bundle");
         let bundle_bin_dir = bundle_dir.join("bin");
         let bin_dir = runtime_dir.join("bin");
         let managed_app = runtime_dir.join("WeChat.app");
         Ok(Self {
-            socket_path: runtime_dir.join("agent.sock"),
+            socket_path,
             pid_file: runtime_dir.join("wechat.pid"),
             run_state: runtime_dir.join("run-state.json"),
             latest_scan: result_dir.join("latest-scan.json"),
@@ -43,6 +54,7 @@ impl AppLayout {
             runtime_dir,
             result_dir,
             log_dir,
+            ipc_dir,
             bundle_dir,
             bundle_bin_dir,
             managed_app,
@@ -51,12 +63,14 @@ impl AppLayout {
     }
 
     pub fn ensure_dirs(&self) -> Result<()> {
-        std::fs::create_dir_all(&self.runtime_dir)?;
-        std::fs::create_dir_all(&self.result_dir)?;
-        std::fs::create_dir_all(&self.log_dir)?;
-        std::fs::create_dir_all(&self.bin_dir)?;
-        std::fs::create_dir_all(&self.bundle_dir)?;
-        std::fs::create_dir_all(&self.bundle_bin_dir)?;
+        util::create_private_dir(&self.root)?;
+        util::create_private_dir(&self.runtime_dir)?;
+        util::create_private_dir(&self.result_dir)?;
+        util::create_private_dir(&self.log_dir)?;
+        util::create_private_dir(&self.ipc_dir)?;
+        util::create_private_dir(&self.bin_dir)?;
+        util::create_private_dir(&self.bundle_dir)?;
+        util::create_private_dir(&self.bundle_bin_dir)?;
         Ok(())
     }
 
@@ -93,6 +107,14 @@ impl AppLayout {
     }
 
     pub fn agent_log_file(&self) -> PathBuf {
-        self.log_dir.join("agent.log")
+        std::env::var_os("MACFRIENDS_LOG_FILE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.ipc_dir.join("agent.log"))
     }
+}
+
+fn current_user_label() -> String {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("LOGNAME"))
+        .unwrap_or_else(|_| "user".to_string())
 }

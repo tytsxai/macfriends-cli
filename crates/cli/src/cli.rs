@@ -28,6 +28,23 @@ pub enum Command {
     Cleanup,
 }
 
+impl Command {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Command::Doctor => "doctor",
+            Command::Prepare(_) => "prepare",
+            Command::Launch(_) => "launch",
+            Command::Attach => "attach",
+            Command::Profile => "profile",
+            Command::Contacts => "contacts",
+            Command::Scan(_) => "scan",
+            Command::Export(_) => "export",
+            Command::Detach => "detach",
+            Command::Cleanup => "cleanup",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Args)]
 pub struct PrepareArgs {
     #[arg(long, help = "源 WeChat.app 路径，默认 /Applications/WeChat.app")]

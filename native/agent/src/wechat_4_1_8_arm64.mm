@@ -3,6 +3,8 @@
 
 static NSString *const kExpectedBundleId = @"com.tencent.xinWeChat";
 static NSString *const kExpectedVersion = @"4.1.8";
+static NSString *const kExpectedRuntimeBundleId = @"com.tencent.flue.WeChatAppEx";
+static NSString *const kExpectedRuntimeVersion = @"2.4.1.19024";
 static NSString *const kExpectedArch = @"arm64";
 static NSString *const kAdapterName = @"wechat_4_1_8_arm64";
 
@@ -54,13 +56,15 @@ static NSDictionary *probeTarget(NSDictionary *adapterManifest) {
 
     BOOL bundleMatch = bundleId && [bundleId isEqualToString:manifestBundleId];
     BOOL versionMatch = bundleVersion && [bundleVersion isEqualToString:manifestVersion];
+    BOOL runtimeBundleMatch = bundleId && [bundleId isEqualToString:kExpectedRuntimeBundleId];
+    BOOL runtimeVersionMatch = bundleVersion && [bundleVersion isEqualToString:kExpectedRuntimeVersion];
     BOOL archMatch = arch && [arch isEqualToString:manifestArch];
-    BOOL supported = bundleMatch && versionMatch && archMatch;
+    BOOL supported = archMatch && runtimeBundleMatch && runtimeVersionMatch;
 
     NSString *reason = nil;
-    if (!bundleMatch) {
+    if (!bundleMatch && !runtimeBundleMatch) {
         reason = @"version_mismatch";
-    } else if (!versionMatch) {
+    } else if (!versionMatch && !runtimeVersionMatch) {
         reason = @"version_mismatch";
     } else if (!archMatch) {
         reason = @"adapter_not_loaded";

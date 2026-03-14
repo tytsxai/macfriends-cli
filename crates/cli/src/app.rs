@@ -17,7 +17,12 @@ use std::time::{Duration, Instant};
 const DEFAULT_SOURCE_APP: &str = "/Applications/WeChat.app";
 const AGENT_BOOT_TIMEOUT: Duration = Duration::from_secs(10);
 const AGENT_STOP_TIMEOUT: Duration = Duration::from_secs(3);
+const AGENT_STABILIZE_TIMEOUT: Duration = Duration::from_secs(5);
+const FAILED_LAUNCH_ROLLBACK_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
+const PRODUCTION_SCAN_HISTORY_LIMIT: usize = 100;
+const FIXTURE_SCAN_HISTORY_LIMIT: usize = 20;
+const STABLE_AGENT_PING_SUCCESSES: usize = 3;
 
 pub fn run(cli: Cli) -> Result<()> {
     match cli.command {
@@ -31,6 +36,63 @@ pub fn run(cli: Cli) -> Result<()> {
         Command::Export(args) => export_results(cli.json, args),
         Command::Detach => detach(cli.json),
         Command::Cleanup => cleanup(cli.json),
+    }
+}
+
+pub fn report_failure(command: &str, json_output: bool, error: &anyhow::Error) {
+    let error_code = classify_error_code(error);
+    let causes = error_causes(error);
+
+    if let Ok(layout) = AppLayout::detect() {
+        let _ = util::log_command_event(
+            &layout.cli_log_file(),
+            command,
+            "error",
+            json!({
+                "error_code": error_code,
+                "message": error.to_string(),
+                "causes": causes,
+            }),
+        );
+    }
+
+    if json_output {
+        let payload = json!({
+            "ok": false,
+            "command": command,
+            "error_code": error_code,
+            "message": error.to_string(),
+            "causes": causes,
+        });
+        match serde_json::to_string_pretty(&payload) {
+            Ok(text) => println!("{text}"),
+            Err(_) => println!(
+                "{{\"ok\":false,\"command\":\"{command}\",\"error_code\":\"command_failed\"}}"
+            ),
+        }
+    } else {
+        eprintln!("Error [{error_code}]: {error}");
+    }
+}
+
+pub fn error_exit_code(error: &anyhow::Error) -> u8 {
+    match classify_error_code(error) {
+        "version_mismatch" => 10,
+        "adapter_not_loaded" => 11,
+        "resolver_validation_failed" => 12,
+        "profile_primitive_unresolved" => 13,
+        "contacts_primitive_unresolved" => 14,
+        "scan_primitive_unresolved" => 15,
+        "rpc_timeout" => 16,
+        "agent_boot_timeout" => 17,
+        "managed_app_missing" => 18,
+        "agent_socket_conflict" => 19,
+        "agent_process_conflict" => 20,
+        "agent_unreachable" => 21,
+        "request_too_large" => 22,
+        "production_scan_missing" => 23,
+        "fixture_export_forbidden" => 24,
+        _ => 1,
     }
 }
 
@@ -145,6 +207,8 @@ fn doctor(json_output: bool) -> Result<()> {
 fn prepare(json_output: bool, args: PrepareArgs) -> Result<()> {
     let layout = AppLayout::detect()?;
     layout.ensure_dirs()?;
+    ensure_prepare_safe(&layout)?;
+    remove_stale_runtime_bundle_fragments(&layout)?;
     let source_app = args
         .source_app
         .unwrap_or_else(|| PathBuf::from(DEFAULT_SOURCE_APP));
@@ -272,14 +336,35 @@ fn launch(json_output: bool, args: LaunchArgs) -> Result<()> {
                 &read_adapter_template(&layout).unwrap_or_else(|_| default_adapter_manifest()),
             )
         });
-    util::remove_file_if_exists(&layout.socket_path)?;
+    if layout.socket_path.exists() {
+        if rpc::ping(&layout.socket_path).is_ok() {
+            return Err(anyhow!(
+                "检测到已有 agent socket 正在服务；请先执行 macfriends detach 或关闭受控进程"
+            ));
+        }
+        util::remove_file_if_exists(&layout.socket_path)?;
+    }
 
     let executable = util::app_executable(&layout.managed_app)?;
     let mut command = ProcessCommand::new(executable);
+    for key in [
+        "MACFRIENDS_ENABLE_FIXTURE",
+        "MACFRIENDS_ADAPTER_TEMPLATE",
+        "MACFRIENDS_LOG_FILE",
+        "MACFRIENDS_AGENT_SOCKET",
+        "MACFRIENDS_ADAPTER_PATH",
+        "MACFRIENDS_LOGIN_MODE",
+        "DYLD_INSERT_LIBRARIES",
+        "DYLD_LIBRARY_PATH",
+        "DYLD_FRAMEWORK_PATH",
+        "DYLD_FALLBACK_FRAMEWORK_PATH",
+        "DYLD_FALLBACK_LIBRARY_PATH",
+        "DYLD_ROOT_PATH",
+        "DYLD_SHARED_REGION",
+    ] {
+        command.env_remove(key);
+    }
     command
-        .env_remove("MACFRIENDS_ENABLE_FIXTURE")
-        .env_remove("MACFRIENDS_ADAPTER_TEMPLATE")
-        .env_remove("MACFRIENDS_LOG_FILE")
         .env("DYLD_INSERT_LIBRARIES", layout.agent_dylib())
         .env("MACFRIENDS_AGENT_SOCKET", &layout.socket_path)
         .env("MACFRIENDS_ADAPTER_PATH", &layout.adapter_manifest)
@@ -291,6 +376,7 @@ fn launch(json_output: bool, args: LaunchArgs) -> Result<()> {
 
     let run_state = RunState {
         pid: child.id(),
+        runtime_pid: None,
         started_at: Utc::now(),
         socket_path: layout.socket_path.display().to_string(),
         adapter_name: target_status.adapter_name.clone(),
@@ -300,15 +386,41 @@ fn launch(json_output: bool, args: LaunchArgs) -> Result<()> {
     util::write_json_file(&layout.run_state, &run_state)?;
     util::write_bytes_atomic(&layout.pid_file, child.id().to_string().as_bytes())?;
 
-    let status = wait_for_agent_status(&layout, child.id(), AGENT_BOOT_TIMEOUT)?;
+    let status = match wait_for_agent_status(&layout, child.id(), AGENT_BOOT_TIMEOUT) {
+        Ok(status) => status,
+        Err(error) => {
+            return match rollback_failed_launch(&layout, child.id()) {
+                Ok(()) => Err(error),
+                Err(cleanup_error) => {
+                    Err(error.context(format!("启动失败后的回滚未完成: {cleanup_error}")))
+                }
+            };
+        }
+    };
+    let status = wait_for_stable_agent_status(&layout, status, AGENT_STABILIZE_TIMEOUT)?;
+    let runtime_pid = detect_runtime_pid(&layout, &status);
+    let run_state = RunState {
+        runtime_pid,
+        ..run_state
+    };
+    util::write_json_file(&layout.run_state, &run_state)?;
     let release_blockers = collect_release_blockers(&target_status, Some(&status));
     let message = if release_blockers.is_empty() {
-        format!("已启动受控目标进程，PID={}，运行态 Ready", child.id())
+        format!(
+            "已启动受控目标进程，PID={}{}，运行态 Ready",
+            child.id(),
+            format_runtime_pid(runtime_pid)
+        )
     } else {
-        format!("已启动受控目标进程，PID={}，但未达到 Ready", child.id())
+        format!(
+            "已启动受控目标进程，PID={}{}，但未达到 Ready",
+            child.id(),
+            format_runtime_pid(runtime_pid)
+        )
     };
     let report = LaunchReport {
         pid: child.id(),
+        runtime_pid,
         socket_path: layout.socket_path.display().to_string(),
         runtime_ready: status.runtime_ready,
         fixture_enabled: status.fixture_enabled,
@@ -325,6 +437,7 @@ fn launch(json_output: bool, args: LaunchArgs) -> Result<()> {
         },
         json!({
             "pid": report.pid,
+            "runtime_pid": report.runtime_pid,
             "runtime_ready": report.runtime_ready,
             "fixture_enabled": report.fixture_enabled,
             "release_blockers": report.release_blockers,
@@ -403,11 +516,12 @@ fn contacts(json_output: bool) -> Result<()> {
     })
 }
 
-fn scan(json_output: bool, _args: ScanArgs) -> Result<()> {
+fn scan(json_output: bool, args: ScanArgs) -> Result<()> {
     let layout = AppLayout::detect()?;
     layout.ensure_dirs()?;
     let status = rpc::ping(&layout.socket_path)?;
-    let mut report: ScanReport = rpc::call(&layout.socket_path, "scan", json!({ "all": true }))?;
+    let mut report: ScanReport =
+        rpc::call(&layout.socket_path, "scan", json!({ "all": args.all }))?;
     report.scanned_at = Utc::now();
     report.run_id = generate_run_id();
     report.adapter_name = status
@@ -426,6 +540,16 @@ fn scan(json_output: bool, _args: ScanArgs) -> Result<()> {
             .join(format!("scan-{}.json", report.run_id));
         util::write_json_file(&history_path, &report)?;
         util::write_json_file(&layout.latest_scan, &report)?;
+        if let Err(error) =
+            prune_history_dir(&layout.scan_history_dir(), PRODUCTION_SCAN_HISTORY_LIMIT)
+        {
+            let _ = util::log_command_event(
+                &layout.cli_log_file(),
+                "scan-retention",
+                "warning",
+                json!({ "directory": layout.scan_history_dir(), "error": error.to_string() }),
+            );
+        }
         layout.latest_scan.clone()
     } else {
         let fixture_path = layout
@@ -433,6 +557,16 @@ fn scan(json_output: bool, _args: ScanArgs) -> Result<()> {
             .join(format!("fixture-scan-{}.json", report.run_id));
         util::write_json_file(&fixture_path, &report)?;
         util::write_json_file(&layout.latest_fixture_scan, &report)?;
+        if let Err(error) =
+            prune_history_dir(&layout.fixture_result_dir(), FIXTURE_SCAN_HISTORY_LIMIT)
+        {
+            let _ = util::log_command_event(
+                &layout.cli_log_file(),
+                "scan-retention",
+                "warning",
+                json!({ "directory": layout.fixture_result_dir(), "error": error.to_string() }),
+            );
+        }
         fixture_path
     };
 
@@ -519,12 +653,15 @@ fn detach(json_output: bool) -> Result<()> {
 fn cleanup(json_output: bool) -> Result<()> {
     let layout = AppLayout::detect()?;
     if let Some(run_state) = read_run_state_if_exists(&layout)?
-        && util::pid_is_running(run_state.pid)
+        && run_state_has_live_process(&run_state)
     {
         return Err(anyhow!(
             "受控进程仍在运行，PID={}；请先退出 WeChat 再执行 cleanup",
-            run_state.pid
+            preferred_run_state_pid(&run_state)
         ));
+    }
+    if layout.socket_path.exists() && rpc::ping(&layout.socket_path).is_ok() {
+        return Err(anyhow!("agent 仍在运行；请先执行 macfriends detach"));
     }
     util::remove_file_if_exists(&layout.socket_path)?;
     util::remove_file_if_exists(&layout.pid_file)?;
@@ -542,18 +679,23 @@ fn cleanup(json_output: bool) -> Result<()> {
 }
 
 fn ensure_native_assets(layout: &AppLayout) -> Result<()> {
-    if layout.bundled_agent_dylib().exists() && layout.bundled_agent_host().exists() {
-        return Ok(());
+    if repo_native_assets_available()
+        || !layout.bundled_agent_dylib().exists()
+        || !layout.bundled_agent_host().exists()
+        || !layout.bundled_adapter_template().exists()
+    {
+        if !repo_native_assets_available() {
+            build_native_agent()?;
+        }
+        let built_dylib = PathBuf::from("native/agent/build/libmacfriends_agent.dylib");
+        let built_host = PathBuf::from("native/agent/build/macfriends-host");
+        let adapter_template = repo_adapter_template_path()?;
+
+        util::copy_file(&built_dylib, &layout.bundled_agent_dylib())?;
+        util::copy_file(&built_host, &layout.bundled_agent_host())?;
+        util::copy_file(&adapter_template, &layout.bundled_adapter_template())?;
     }
 
-    build_native_agent()?;
-    let built_dylib = PathBuf::from("native/agent/build/libmacfriends_agent.dylib");
-    let built_host = PathBuf::from("native/agent/build/macfriends-host");
-    let adapter_template = repo_adapter_template_path()?;
-
-    util::copy_file(&built_dylib, &layout.bundled_agent_dylib())?;
-    util::copy_file(&built_host, &layout.bundled_agent_host())?;
-    util::copy_file(&adapter_template, &layout.bundled_adapter_template())?;
     Ok(())
 }
 
@@ -568,6 +710,14 @@ fn build_native_agent() -> Result<()> {
         return Err(anyhow!("native agent 构建失败"));
     }
     Ok(())
+}
+
+fn repo_native_assets_available() -> bool {
+    Path::new("native/agent/build/libmacfriends_agent.dylib").exists()
+        && Path::new("native/agent/build/macfriends-host").exists()
+        && repo_adapter_template_path()
+            .map(|path| path.exists())
+            .unwrap_or(false)
 }
 
 fn read_adapter_template(layout: &AppLayout) -> Result<AdapterManifest> {
@@ -742,17 +892,19 @@ fn generate_run_id() -> String {
 fn wait_for_agent_status(layout: &AppLayout, pid: u32, timeout: Duration) -> Result<AgentStatus> {
     let deadline = Instant::now() + timeout;
     loop {
-        if !util::pid_is_running(pid) {
-            return Err(anyhow!("受控进程已退出，agent 启动失败"));
-        }
         if layout.socket_path.exists()
             && let Ok(status) = rpc::ping(&layout.socket_path)
         {
             return Ok(status);
         }
         if Instant::now() >= deadline {
+            let pid_note = if util::pid_is_running(pid) {
+                format!("PID={} 仍在运行", pid)
+            } else {
+                format!("PID={} 已退出，等待运行时子进程接管超时", pid)
+            };
             return Err(anyhow!(
-                "等待 agent socket 就绪超时: {}",
+                "等待 agent socket 就绪超时: {} ({pid_note})",
                 layout.socket_path.display()
             ));
         }
@@ -773,6 +925,125 @@ fn wait_for_socket_stop(layout: &AppLayout, timeout: Duration) -> Result<()> {
     }
 }
 
+fn wait_for_stable_agent_status(
+    layout: &AppLayout,
+    initial_status: AgentStatus,
+    timeout: Duration,
+) -> Result<AgentStatus> {
+    let deadline = Instant::now() + timeout;
+    let mut last_status = initial_status;
+    let mut consecutive_successes = 1usize;
+
+    while consecutive_successes < STABLE_AGENT_PING_SUCCESSES {
+        thread::sleep(POLL_INTERVAL);
+        match rpc::ping(&layout.socket_path) {
+            Ok(status) => {
+                last_status = status;
+                consecutive_successes += 1;
+            }
+            Err(_) => {
+                consecutive_successes = 0;
+            }
+        }
+
+        if Instant::now() >= deadline {
+            return Err(anyhow!(
+                "agent socket 未稳定，无法完成运行态接管: {}",
+                layout.socket_path.display()
+            ));
+        }
+    }
+
+    Ok(last_status)
+}
+
+fn rollback_failed_launch(layout: &AppLayout, pid: u32) -> Result<()> {
+    let mut cleanup_errors = Vec::new();
+
+    if let Err(error) = util::terminate_pid(pid, FAILED_LAUNCH_ROLLBACK_TIMEOUT) {
+        cleanup_errors.push(error.to_string());
+    }
+    for path in [&layout.socket_path, &layout.pid_file, &layout.run_state] {
+        if let Err(error) = util::remove_file_if_exists(path) {
+            cleanup_errors.push(format!("清理 {} 失败: {error}", path.display()));
+        }
+    }
+
+    if cleanup_errors.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow!(cleanup_errors.join("; ")))
+    }
+}
+
+fn ensure_prepare_safe(layout: &AppLayout) -> Result<()> {
+    if let Some(run_state) = read_run_state_if_exists(layout)?
+        && run_state_has_live_process(&run_state)
+    {
+        return Err(anyhow!(
+            "受控进程仍在运行，PID={}；请先执行 macfriends detach 或关闭受控进程后再 prepare",
+            preferred_run_state_pid(&run_state)
+        ));
+    }
+
+    if layout.socket_path.exists() {
+        if rpc::ping(&layout.socket_path).is_ok() {
+            return Err(anyhow!(
+                "检测到运行中的 agent socket；请先执行 macfriends detach 后再 prepare"
+            ));
+        }
+        util::remove_file_if_exists(&layout.socket_path)?;
+    }
+
+    util::remove_file_if_exists(&layout.pid_file)?;
+    util::remove_file_if_exists(&layout.run_state)?;
+    Ok(())
+}
+
+fn remove_stale_runtime_bundle_fragments(layout: &AppLayout) -> Result<()> {
+    for name in ["Contents", "Frameworks", "MacOS", "Resources"] {
+        let path = layout.runtime_dir.join(name);
+        if path.exists() {
+            std::fs::remove_dir_all(path)?;
+        }
+    }
+    let pkg_info = layout.runtime_dir.join("PkgInfo");
+    util::remove_file_if_exists(&pkg_info)?;
+    Ok(())
+}
+
+fn prune_history_dir(dir: &Path, max_files: usize) -> Result<()> {
+    if max_files == 0 || !dir.exists() {
+        return Ok(());
+    }
+
+    let mut files = std::fs::read_dir(dir)?
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|entry| {
+            entry
+                .file_type()
+                .map(|kind| kind.is_file())
+                .unwrap_or(false)
+                && entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.ends_with(".json"))
+        })
+        .collect::<Vec<_>>();
+
+    if files.len() <= max_files {
+        return Ok(());
+    }
+
+    files.sort_by_key(|entry| entry.file_name());
+    let excess = files.len() - max_files;
+    for entry in files.into_iter().take(excess) {
+        std::fs::remove_file(entry.path())?;
+    }
+    Ok(())
+}
+
 fn read_run_state_if_exists(layout: &AppLayout) -> Result<Option<RunState>> {
     if !layout.run_state.exists() {
         return Ok(None);
@@ -782,8 +1053,11 @@ fn read_run_state_if_exists(layout: &AppLayout) -> Result<Option<RunState>> {
 
 fn cleanup_stale_runtime_state(layout: &AppLayout) -> Result<()> {
     if let Some(run_state) = read_run_state_if_exists(layout)?
-        && !util::pid_is_running(run_state.pid)
+        && !run_state_has_live_process(&run_state)
     {
+        if layout.socket_path.exists() && rpc::ping(&layout.socket_path).is_ok() {
+            return Ok(());
+        }
         util::remove_file_if_exists(&layout.run_state)?;
         util::remove_file_if_exists(&layout.pid_file)?;
         util::remove_file_if_exists(&layout.socket_path)?;
@@ -796,6 +1070,86 @@ fn agent_status_if_running(layout: &AppLayout) -> Option<AgentStatus> {
         return None;
     }
     rpc::ping(&layout.socket_path).ok()
+}
+
+fn detect_runtime_pid(layout: &AppLayout, status: &AgentStatus) -> Option<u32> {
+    let patterns = match status.bundle_id.as_deref() {
+        Some("com.tencent.flue.WeChatAppEx") => vec!["WeChatAppEx.app/Contents/MacOS/WeChatAppEx"],
+        Some("com.tencent.xinWeChat") => vec!["WeChat.app/Contents/MacOS/WeChat"],
+        _ => vec![
+            "WeChatAppEx.app/Contents/MacOS/WeChatAppEx",
+            "WeChat.app/Contents/MacOS/WeChat",
+        ],
+    };
+
+    for pattern in patterns {
+        if let Some(pid) = first_pid_with_open_socket(layout, pattern) {
+            return Some(pid);
+        }
+    }
+    None
+}
+
+fn first_pid_with_open_socket(layout: &AppLayout, pattern: &str) -> Option<u32> {
+    let output = ProcessCommand::new("/usr/bin/pgrep")
+        .arg("-f")
+        .arg(pattern)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let pid = line.trim().parse::<u32>().ok()?;
+        if process_has_socket_open(pid, &layout.socket_path) {
+            return Some(pid);
+        }
+    }
+    None
+}
+
+fn process_has_socket_open(pid: u32, socket_path: &Path) -> bool {
+    let output = match ProcessCommand::new("/usr/sbin/lsof")
+        .arg("-p")
+        .arg(pid.to_string())
+        .output()
+    {
+        Ok(output) => output,
+        Err(_) => return false,
+    };
+
+    if !output.status.success() {
+        return false;
+    }
+
+    String::from_utf8_lossy(&output.stdout).contains(socket_path.to_string_lossy().as_ref())
+}
+
+fn run_state_has_live_process(run_state: &RunState) -> bool {
+    run_state_pids(run_state)
+        .into_iter()
+        .any(util::pid_is_running)
+}
+
+fn preferred_run_state_pid(run_state: &RunState) -> u32 {
+    run_state.runtime_pid.unwrap_or(run_state.pid)
+}
+
+fn run_state_pids(run_state: &RunState) -> Vec<u32> {
+    let mut pids = vec![run_state.pid];
+    if let Some(runtime_pid) = run_state.runtime_pid
+        && runtime_pid != run_state.pid
+    {
+        pids.push(runtime_pid);
+    }
+    pids
+}
+
+fn format_runtime_pid(runtime_pid: Option<u32>) -> String {
+    runtime_pid
+        .map(|pid| format!("，Runtime PID={pid}"))
+        .unwrap_or_default()
 }
 
 fn default_adapter_manifest() -> AdapterManifest {
@@ -828,6 +1182,79 @@ fn default_target_status() -> TargetStatus {
 
 fn log_command(layout: &AppLayout, command: &str, status: &str, detail: serde_json::Value) {
     let _ = util::log_command_event(&layout.cli_log_file(), command, status, detail);
+}
+
+fn classify_error_code(error: &anyhow::Error) -> &'static str {
+    let message = error
+        .chain()
+        .map(|item| item.to_string())
+        .collect::<Vec<_>>()
+        .join(" | ");
+
+    if message.contains("profile_primitive_unresolved") {
+        return "profile_primitive_unresolved";
+    }
+    if message.contains("contacts_primitive_unresolved") {
+        return "contacts_primitive_unresolved";
+    }
+    if message.contains("scan_primitive_unresolved") {
+        return "scan_primitive_unresolved";
+    }
+    if message.contains("resolver_validation_failed") {
+        return "resolver_validation_failed";
+    }
+    if message.contains("request_too_large") {
+        return "request_too_large";
+    }
+    if message.contains("最近一次扫描结果不是生产结果") {
+        return "fixture_export_forbidden";
+    }
+    if message.contains("未找到生产扫描结果") {
+        return "production_scan_missing";
+    }
+    if message.contains("adapter_not_loaded") {
+        return "adapter_not_loaded";
+    }
+    if message.contains("version_mismatch") {
+        return "version_mismatch";
+    }
+    if message.contains("等待 agent socket 就绪超时") {
+        return "agent_boot_timeout";
+    }
+    if message.contains("agent socket 未稳定") {
+        return "agent_boot_timeout";
+    }
+    if message.contains("等待 agent 停止超时")
+        || message.contains("rpc_timeout")
+        || message.contains("timed out")
+        || message.contains("超时")
+    {
+        return "rpc_timeout";
+    }
+    if message.contains("受控微信副本不存在") {
+        return "managed_app_missing";
+    }
+    if message.contains("检测到已有 agent socket") {
+        return "agent_socket_conflict";
+    }
+    if message.contains("已有受控进程正在运行") {
+        return "agent_process_conflict";
+    }
+    if message.contains("无法连接 agent socket") {
+        return "agent_unreachable";
+    }
+    "command_failed"
+}
+
+fn error_causes(error: &anyhow::Error) -> Vec<String> {
+    let mut causes = error
+        .chain()
+        .skip(1)
+        .map(|item| item.to_string())
+        .filter(|item| !item.is_empty())
+        .collect::<Vec<_>>();
+    causes.dedup();
+    causes
 }
 
 #[cfg(test)]
@@ -883,5 +1310,43 @@ mod tests {
         };
         let blockers = collect_release_blockers(&target_status, Some(&agent_status));
         assert!(blockers.iter().any(|item| item.contains("fixture 模式")));
+    }
+
+    #[test]
+    fn classify_known_error_codes() {
+        assert_eq!(
+            classify_error_code(&anyhow!("scan_primitive_unresolved")),
+            "scan_primitive_unresolved"
+        );
+        assert_eq!(
+            classify_error_code(&anyhow!("等待 agent socket 就绪超时")),
+            "agent_boot_timeout"
+        );
+        assert_eq!(
+            classify_error_code(&anyhow!("无法连接 agent socket: /tmp/test.sock")),
+            "agent_unreachable"
+        );
+        assert_eq!(
+            classify_error_code(&anyhow!("最近一次扫描结果不是生产结果，拒绝导出")),
+            "fixture_export_forbidden"
+        );
+    }
+
+    #[test]
+    fn prune_history_removes_oldest_files() {
+        let temp = tempfile::tempdir().unwrap();
+        for name in [
+            "scan-20260101T000000Z.json",
+            "scan-20260102T000000Z.json",
+            "scan-20260103T000000Z.json",
+        ] {
+            std::fs::write(temp.path().join(name), b"{}").unwrap();
+        }
+
+        prune_history_dir(temp.path(), 2).unwrap();
+
+        assert!(!temp.path().join("scan-20260101T000000Z.json").exists());
+        assert!(temp.path().join("scan-20260102T000000Z.json").exists());
+        assert!(temp.path().join("scan-20260103T000000Z.json").exists());
     }
 }

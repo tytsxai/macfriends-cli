@@ -3,8 +3,14 @@ use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::fs::OpenOptions;
 use std::io::Write;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
+
+const LOG_ROTATE_BYTES: u64 = 10 * 1024 * 1024;
 
 pub fn print_output<T: Serialize>(json: bool, value: &T, human: impl Fn() -> String) -> Result<()> {
     if json {
@@ -58,6 +64,16 @@ pub fn copy_file(src: &Path, dst: &Path) -> Result<()> {
     let parent = dst.parent().context("目标目录非法")?;
     std::fs::create_dir_all(parent)?;
     std::fs::copy(src, dst)?;
+    Ok(())
+}
+
+pub fn create_private_dir(path: &Path) -> Result<()> {
+    std::fs::create_dir_all(path)?;
+    #[cfg(unix)]
+    {
+        let permissions = std::fs::Permissions::from_mode(0o700);
+        std::fs::set_permissions(path, permissions)?;
+    }
     Ok(())
 }
 
@@ -129,7 +145,8 @@ pub fn write_bytes_atomic(path: &Path, content: &[u8]) -> Result<()> {
 
 pub fn append_log(path: &Path, event: Value) -> Result<()> {
     let parent = path.parent().context("日志目录非法")?;
-    std::fs::create_dir_all(parent)?;
+    create_private_dir(parent)?;
+    rotate_file_if_needed(path, LOG_ROTATE_BYTES)?;
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     writeln!(file, "{}", serde_json::to_string(&event)?)?;
     Ok(())
@@ -163,4 +180,97 @@ pub fn current_exe_dir() -> Option<PathBuf> {
         .ok()?
         .parent()
         .map(Path::to_path_buf)
+}
+
+pub fn terminate_pid(pid: u32, timeout: Duration) -> Result<()> {
+    if !pid_is_running(pid) {
+        return Ok(());
+    }
+
+    signal_pid(pid, "-TERM")?;
+    let deadline = Instant::now() + timeout;
+    while pid_is_running(pid) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    if !pid_is_running(pid) {
+        return Ok(());
+    }
+
+    signal_pid(pid, "-KILL")?;
+    let force_deadline = Instant::now() + Duration::from_secs(1);
+    while pid_is_running(pid) && Instant::now() < force_deadline {
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    if pid_is_running(pid) {
+        return Err(anyhow!("无法终止进程 PID={pid}"));
+    }
+    Ok(())
+}
+
+fn signal_pid(pid: u32, signal: &str) -> Result<()> {
+    let status = Command::new("/bin/kill")
+        .arg(signal)
+        .arg(pid.to_string())
+        .status()
+        .with_context(|| format!("发送信号失败: {signal} -> {pid}"))?;
+    if status.success() || !pid_is_running(pid) {
+        Ok(())
+    } else {
+        Err(anyhow!("发送信号失败: {signal} -> {pid}"))
+    }
+}
+
+fn rotate_file_if_needed(path: &Path, max_bytes: u64) -> Result<()> {
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+
+    if metadata.len() < max_bytes {
+        return Ok(());
+    }
+
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("日志文件名非法")?;
+    let backup_path = path.with_file_name(format!("{file_name}.1"));
+    remove_file_if_exists(&backup_path)?;
+    std::fs::rename(path, backup_path)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn rotate_file_moves_large_log_to_backup() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("cli.log");
+        std::fs::write(&path, b"0123456789").unwrap();
+
+        rotate_file_if_needed(&path, 5).unwrap();
+
+        assert!(!path.exists());
+        assert_eq!(
+            std::fs::read(path.with_file_name("cli.log.1")).unwrap(),
+            b"0123456789"
+        );
+    }
+
+    #[test]
+    fn create_private_dir_is_idempotent() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("nested").join("dir");
+
+        create_private_dir(&path).unwrap();
+        create_private_dir(&path).unwrap();
+
+        assert!(path.exists());
+    }
 }
