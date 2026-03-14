@@ -22,8 +22,9 @@ agent 内部职责分层：
 2. `prepare` 构建 agent 与宿主，并执行 ad-hoc 签名
 3. `prepare` 写入 `adapter.json` 与 `target-status.json`
 4. `launch` 使用 `DYLD_INSERT_LIBRARIES` 启动受控副本
-5. agent 在构造函数里启动 Unix Domain Socket 服务
-6. CLI 通过 JSON RPC 调用 `status/profile/contacts/scan/stop`
+5. 生产运行态由 `WeChatAppEx 2.4.1.19024` 承接；主 `WeChat 4.1.8` 主要负责拉起运行时组件
+6. agent 在受支持运行时组件内启动 Unix Domain Socket 服务
+7. CLI 通过 JSON RPC 调用 `status/profile/contacts/scan/stop`
 
 ## 当前适配边界
 

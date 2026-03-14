@@ -14,6 +14,8 @@ make install-local
 - 将 `macfriends` 安装到 `~/.local/bin/macfriends`
 - 将 agent 与 manifest 安装到 `~/Library/Application Support/MacFriends/bundle/`
 
+如果你是在仓库里开发而不是使用发布包，`prepare --force` 会优先同步当前仓库构建出的 native agent/host，而不是继续复用旧的 `bundle/` 资产。
+
 ## 打包发布
 
 在项目根目录执行：
@@ -26,6 +28,7 @@ make package
 
 ```bash
 dist/macfriends-0.1.0-macos-arm64.tar.gz
+dist/macfriends-0.1.0-macos-arm64.tar.gz.sha256
 ```
 
 打包内容包括：
@@ -56,3 +59,11 @@ macfriends attach --json
 ```
 
 只有 `runtime_ready=true`、`fixture_enabled=false`、`release_blockers=[]` 才可视为可上线。安装脚本会自动保留上一版本到 `macfriends.previous` 和 `bundle.previous`。
+
+如果命令以 `--json` 运行，即使失败也会输出结构化错误对象，包含：
+- `command`
+- `error_code`
+- `message`
+- `causes`
+
+安装脚本会先校验构建产物是否齐全，再以临时文件/目录完成原子替换，避免安装过程中留下半更新状态。

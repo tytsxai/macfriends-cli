@@ -6,6 +6,7 @@ MacFriends 是一个**独立维护的 macOS 微信好友关系检测 CLI 工具*
 - Rust CLI + Objective-C++ agent
 - 仅面向 macOS / Apple Silicon
 - 当前锁定 `WeChat 4.1.8 (arm64)`
+- 生产运行态实际附着在 `WeChatAppEx 2.4.1.19024`
 - 本地运行，不依赖云端服务
 - 强调 Ready 门禁、可诊断、可回滚、可维护
 
@@ -16,6 +17,9 @@ MacFriends 是一个**独立维护的 macOS 微信好友关系检测 CLI 工具*
 - 单版本 adapter manifest：`WeChat 4.1.8 + arm64 + signature_scan`
 - 受控副本准备、ad-hoc 签名、Unix Domain Socket IPC、结果导出
 - 版本门禁、target status 持久化、运行态 Ready 门禁、固定错误码
+- `--json` 成功/失败统一结构化输出、CLI/agent 日志轮转
+- fixture 端到端 smoke、扫描结果留存上限、安装原子替换
+- `prepare --force` 会刷新仓库内最新 native 资产，并清理历史运行目录残留
 - 本地安装脚本、回滚备份位与发布打包脚本
 
 ## 上线判断
@@ -115,6 +119,8 @@ cargo run -p macfriends -- doctor --json
 cargo run -p macfriends -- launch --login --json
 cargo run -p macfriends -- attach --json
 ```
+
+`make ready` 会执行 `cargo fmt --check`、`cargo clippy --all-targets --all-features -- -D warnings`、测试、fixture smoke、构建与打包。
 
 若 `primitive_resolution` 仍是 `unresolved`，则说明核心真实原语尚未闭环，项目仍不可上线。
 
