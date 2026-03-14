@@ -13,9 +13,12 @@ package:
 	./scripts/package.sh
 
 ready:
+	cargo fmt --check
+	cargo clippy --all-targets --all-features -- -D warnings
 	cargo test
 	cargo build
 	$(MAKE) -C native/agent artifacts
+	./scripts/smoke-fixture.sh
 	./scripts/package.sh
 
 install-local:

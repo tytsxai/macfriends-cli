@@ -9,7 +9,7 @@ DIST_DIR="$ROOT_DIR/dist/$PACKAGE_NAME"
 rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR/bin" "$DIST_DIR/bundle/bin" "$DIST_DIR/docs"
 
-cargo build --release --manifest-path "$ROOT_DIR/Cargo.toml"
+cargo build --locked --release --manifest-path "$ROOT_DIR/Cargo.toml"
 make -C "$ROOT_DIR/native/agent" artifacts
 
 cp "$ROOT_DIR/target/release/macfriends" "$DIST_DIR/bin/"
@@ -26,6 +26,7 @@ cp -R "$ROOT_DIR/docs/." "$DIST_DIR/docs/"
 (
   cd "$ROOT_DIR/dist"
   tar -czf "$PACKAGE_NAME.tar.gz" "$PACKAGE_NAME"
+  shasum -a 256 "$PACKAGE_NAME.tar.gz" > "$PACKAGE_NAME.tar.gz.sha256"
 )
 
 echo "Packaged: $ROOT_DIR/dist/$PACKAGE_NAME.tar.gz"

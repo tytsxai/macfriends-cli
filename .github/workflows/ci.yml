@@ -22,6 +22,9 @@ jobs:
       - name: Format check
         run: cargo fmt --all -- --check
 
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
       - name: Test
         run: cargo test
 
@@ -30,6 +33,9 @@ jobs:
 
       - name: Build native agent
         run: make -C native/agent artifacts
+
+      - name: Fixture smoke
+        run: ./scripts/smoke-fixture.sh
 
       - name: Package
         run: ./scripts/package.sh
