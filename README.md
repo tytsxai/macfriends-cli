@@ -1,4 +1,10 @@
-# MacFriends
+# MacFriends · macOS 微信好友关系检测 CLI
+
+[![Release](https://img.shields.io/github/v/release/tytsxai/macfriends-cli)](https://github.com/tytsxai/macfriends-cli/releases) · [llms.txt](llms.txt) · [Issues](https://github.com/tytsxai/macfriends-cli/issues) · [License: MIT](LICENSE)
+
+> **关键词**:macOS 微信好友关系检测 · 微信单删检测 macOS · 微信清理僵尸粉 macOS · WeChat ghost contact macOS · Apple Silicon WeChat CLI · 受控副本 + Ad-hoc 签名 · Unix Domain Socket IPC · Rust + Objective-C++ agent
+>
+> **English**: A maintainability-first macOS CLI for inspecting WeChat (微信) friend relationships on Apple Silicon. Spawns a controlled, ad-hoc-signed copy of WeChat, attaches an Obj-C++ agent over UDS IPC, and exposes profile / contacts / scan primitives — with version gates, fixed error codes, Ready signals, and rollback paths. Designed to be scripted, not GUI-clicked.
 
 MacFriends 是一个**独立维护的 macOS 微信好友关系检测 CLI 工具**，面向 Apple Silicon，聚焦本地运行、受控启动、结果导出与生产可运维能力。
 
@@ -123,6 +129,26 @@ cargo run -p macfriends -- attach --json
 `make ready` 会执行 `cargo fmt --check`、`cargo clippy --all-targets --all-features -- -D warnings`、测试、fixture smoke、构建与打包。
 
 若 `primitive_resolution` 仍是 `unresolved`，则说明核心真实原语尚未闭环，项目仍不可上线。
+
+## FAQ
+
+**Q:能不能像「测一测谁删了我」那样用?**
+原始数据(contacts + scan)拿到后,这种判断你自己做,工具不替你解释。
+
+**Q:会改我装的微信吗?**
+不会。`prepare` 在 runtime 目录里拷一份**受控副本**并 ad-hoc 重签名,启动的是副本,`/Applications/WeChat.app` 完全不动。
+
+**Q:微信升级了怎么办?**
+当前 manifest 锁死在 4.1.8(arm64)。升级后这工具会直接报 `version_mismatch` —— 这是**有意为之**的安全围栏。新版本需要更新 `fixtures/adapter.wechat-macos-arm64.json`。
+
+**Q:Intel Mac 行不行?**
+不行。只支持 Apple Silicon。
+
+**Q:`primitive_resolution=unresolved` 是什么意思?**
+核心读取原语还没闭环。看到这个的版本**不要**上生产。
+
+**Q:怎么判断能上生产?**
+`doctor --json` 或 `attach --json` 同时满足 `runtime_ready=true` + `fixture_enabled=false` + `release_blockers=[]`。
 
 ## 许可
 
