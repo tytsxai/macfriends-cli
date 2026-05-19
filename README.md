@@ -176,3 +176,7 @@ cargo run -p macfriends -- attach --json
 ## 许可
 
 MIT，见 `LICENSE`。
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=tytsxai/macfriends-cli&type=Date)](https://www.star-history.com/#tytsxai/macfriends-cli&Date)
