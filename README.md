@@ -90,9 +90,32 @@ macfriends cleanup
 
 ## 版本策略
 
-- 仅支持 `Apple Silicon`
-- 仅支持 `WeChat 4.1.8`
-- 仅支持 `fixtures/adapter.wechat-macos-arm64.json` 中定义的 `arm64 + signature_scan`
+### 支持矩阵（v0.1.0）
+
+| 组件 | 支持值 | 来源 |
+| --- | --- | --- |
+| 架构 | `arm64`（Apple Silicon） | `fixtures/adapter.wechat-macos-arm64.json` |
+| WeChat bundle | `com.tencent.xinWeChat` | adapter manifest |
+| WeChat 版本 | **`4.1.8`** | adapter `build_target` |
+| 运行态 WeChatAppEx | `2.4.1.19024` | adapter |
+| 实现 | `signature_scan` | adapter `adapter_name` |
+
+新版本支持需要更新 `fixtures/adapter.wechat-macos-arm64.json` 并重新解析原语，不会自动跟进。
+
+### 版本不匹配时怎么办
+
+如果 `prepare` / `doctor` 报 `reason=version_mismatch`，按以下顺序处理：
+
+1. **确认当前微信版本**：
+   ```bash
+   defaults read /Applications/WeChat.app/Contents/Info CFBundleShortVersionString
+   ```
+2. **降级到 4.1.8**：
+   - 历史版本需要自行从 4.1.8 时期的本地备份 / Time Machine 快照 / 第三方旧版镜像取得 —— 本仓库不分发任何 WeChat 安装包
+   - 卸载现有微信前先备份 `~/Library/Containers/com.tencent.xinWeChat/`
+   - 安装 4.1.8 后再次跑 `macfriends prepare`
+3. **不愿降级**：等待本仓库发布新版本 adapter，或自行 fork 更新 `fixtures/adapter.wechat-macos-arm64.json` 中的 `build_target` 并重做原语解析（见 `docs/compatibility.md`）。
+
 - 若源微信版本与目标不匹配，`prepare` 会记录 `target-status.json`，后续 `attach/profile/contacts/scan` 将明确失败
 
 ## 本地 Smoke Test
