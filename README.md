@@ -32,13 +32,19 @@ MacFriends 是一个**独立维护的 macOS 微信好友关系检测 CLI 工具*
 
 ## 界面截图
 
+下面两张截图展示了 MacFriends 的主要产品形态，便于搜索 `macOS 微信好友关系检测`、`微信单删检测 macOS`、`WeChat friend checker CLI`、`WeChat ghost contact macOS` 的用户快速判断项目是否适合自己。
+
 ### 中文本地控制台
 
-![MacFriends 中文本地控制台](docs/assets/macfriends-console-cn.jpg)
+中文本地控制台截图：展示 `macfriends 控制台 --open` 启动后的本机 Web UI，可直接查看运行状态、微信版本兼容提示、阻塞项，并执行准备、启动、扫描、导出、断开和清理等操作。
+
+![MacFriends 中文本地控制台 - macOS 微信好友关系检测 Web UI](docs/assets/macfriends-console-cn.jpg)
 
 ### 状态 API 与兼容提示
 
-![MacFriends 状态 API](docs/assets/macfriends-api-status-cn.jpg)
+状态 API 截图：展示 `/api/status` 返回的结构化 JSON，包括 `lifecycle_label`、`supported_wechat_version`、`installed_wechat_version`、`compatibility_warnings`、`release_blockers` 和下一步建议，适合脚本、自动化或二次开发使用。
+
+![MacFriends 状态 API - WeChat friend checker CLI JSON output](docs/assets/macfriends-api-status-cn.jpg)
 
 ## 上线判断
 

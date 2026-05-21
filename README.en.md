@@ -19,6 +19,20 @@ The repository currently provides:
 - version gating, persisted target status, runtime readiness gates, and stable error codes
 - local install, rollback backup slots, and packaging scripts
 
+## Screenshots
+
+### Local Web Console
+
+The local browser console started by `macfriends serve --open` shows lifecycle, WeChat version compatibility, blockers, logs, and action buttons for prepare, launch, scan, export, detach, and cleanup.
+
+![MacFriends local web console for macOS WeChat friend checking](docs/assets/macfriends-console-cn.jpg)
+
+### Status API
+
+The `/api/status` endpoint returns script-friendly JSON with lifecycle labels, supported WeChat version, installed WeChat version, compatibility warnings, release blockers, and next actions.
+
+![MacFriends status API JSON for WeChat friend checker CLI](docs/assets/macfriends-api-status-cn.jpg)
+
 ## Production readiness gate
 
 A build is not production-ready unless `doctor --json` or `attach --json` reports all of the following:
