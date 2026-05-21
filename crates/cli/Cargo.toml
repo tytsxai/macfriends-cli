@@ -1,11 +1,15 @@
 [package]
 name = "macfriends"
 version = "0.1.0"
-description = "Independently maintained macOS WeChat relationship-checking CLI for Apple Silicon"
+description = "Local-first macOS WeChat friend relationship inspector CLI for Apple Silicon"
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+homepage = "https://github.com/tytsxai/macfriends-cli"
+readme = "../../README.md"
+keywords = ["wechat", "macos", "cli", "apple-silicon", "rust"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 anyhow.workspace = true

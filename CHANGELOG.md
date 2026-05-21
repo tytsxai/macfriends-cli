@@ -15,6 +15,7 @@
 - Fixture smoke now covers the new status command and Web API basics.
 - Web console labels and status text are now Chinese-first for local Chinese users.
 - Fixture smoke now exercises all primary Web API endpoints, including expected failure paths.
+- README, README.en, docs index, llms.txt, and Cargo package metadata now describe MacFriends with clearer SEO/GEO positioning, truthful compatibility limits, quick-start commands, and production readiness gates.
 
 ### Security
 - CSV export now neutralizes spreadsheet-formula-looking contact fields before writing local CSV files.
