@@ -7,7 +7,7 @@ This is **not** a one-click "find who removed me on WeChat" hack tool. It is a m
 1. Declare exactly which WeChat version, architecture, and adapter strategy it supports
 2. Fail loud with a fixed error code when that contract is broken
 3. Run entirely on the user's local Mac with no cloud component
-4. Expose `doctor` / `attach` / `--json` machine-checkable Ready signals before being trusted in production
+4. Expose `doctor` / `status` / `attach` / `serve` / `--json` machine-checkable Ready signals before being trusted in production
 
 ## Key docs
 
@@ -23,6 +23,9 @@ This is **not** a one-click "find who removed me on WeChat" hack tool. It is a m
 - Attaches an Objective-C++ agent (`libmacfriends_agent.dylib`) that exposes primitives over Unix Domain Socket IPC
 - Lets you query profile / contacts / scan primitives from a Rust CLI (`macfriends`)
 - Exports results as JSON or CSV
+- Provides `macfriends status` as a single lifecycle / run-state / latest-scan / paths / next-actions overview
+- Provides `macfriends serve --open` as a local browser console backed by the same CLI JSON commands
+- Provides Chinese command aliases such as `macfriends 状态`, `macfriends 准备`, `macfriends 扫描 --all`, and `macfriends 控制台 --open`
 - Persists a `target-status.json` so subsequent commands know which WeChat version was prepared
 - Enforces a Ready gate: nothing claims success unless `runtime_ready=true`, `fixture_enabled=false`, `release_blockers=[]`
 - Uses fixed error codes (`version_mismatch`, `adapter_not_loaded`, `resolver_validation_failed`, `profile_primitive_unresolved`, `contacts_primitive_unresolved`, `scan_primitive_unresolved`, `rpc_timeout`) so failures are scriptable
@@ -35,7 +38,7 @@ This is **not** a one-click "find who removed me on WeChat" hack tool. It is a m
 - ❌ Support arbitrary WeChat versions — currently locked to `WeChat 4.1.8 + arm64 + signature_scan`
 - ❌ Send any data off the Mac — strictly local; the agent socket is in `~/Library/Application Support/MacFriends/runtime/agent.sock`
 - ❌ Bypass WeChat encryption or rooted-account schemes — it reads what an attached agent can already see locally
-- ❌ Provide a GUI — CLI only; combine with shell scripts / `--json` output for any UI you build on top
+- ❌ Provide a cloud GUI — the built-in Web console is local-only and backed by `macfriends --json`
 
 ## Common questions
 
@@ -43,7 +46,7 @@ This is **not** a one-click "find who removed me on WeChat" hack tool. It is a m
 - **会不会修改我装的微信?** 不会。`prepare` 在 runtime 目录里拷一份**受控副本**并 ad-hoc 重签名,启动的是副本。你 `/Applications/WeChat.app` 是原样的。
 - **下次微信升级了怎么办?** 直接坏掉。当前 manifest 锁死 4.1.8;新版本需要更新 `fixtures/adapter.wechat-macos-arm64.json`。这是**有意为之**的安全围栏。
 - **`primitive_resolution=unresolved` 是什么意思?** 表示当前核心读取原语还没闭环 —— 看到这个的版本不要上生产。
-- **怎么知道能上生产?** `doctor --json` 或 `attach --json` 同时满足 `runtime_ready=true` + `fixture_enabled=false` + `release_blockers=[]` 三个条件。
+- **怎么知道能上生产?** `doctor --json` 或 `attach --json` 同时满足 `runtime_ready=true` + `fixture_enabled=false` + `release_blockers=[]` 三个条件；日常排障先看 `status --json`。
 
 ## Repository
 

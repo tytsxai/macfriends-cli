@@ -12,7 +12,8 @@ Project profile:
 ## Current capabilities
 
 The repository currently provides:
-- a full CLI: `doctor`, `prepare`, `launch`, `attach`, `profile`, `contacts`, `scan`, `export`, `detach`, `cleanup`
+- a full CLI: `doctor`, `status`, `prepare`, `launch`, `attach`, `profile`, `contacts`, `scan`, `export`, `detach`, `cleanup`, `serve`
+- a local web console with status, action buttons, log viewing, and HTTP API endpoints
 - a single-version adapter manifest for `WeChat 4.1.8 + arm64 + signature_scan`
 - managed app-copy preparation, ad-hoc signing, Unix domain socket IPC, and result export
 - version gating, persisted target status, runtime readiness gates, and stable error codes
@@ -35,6 +36,10 @@ make package
 ```
 
 See `docs/install.md`, `docs/operations.md`, `docs/architecture.md`, and `docs/troubleshooting.md` for the full workflow.
+
+`macfriends status` is the recommended day-to-day entrypoint. It summarizes lifecycle, run state, latest scan snapshots, result/log/socket paths, release blockers, and next actions.
+
+Run `macfriends serve --open` to start the local browser console on `127.0.0.1:8765`.
 
 ## License
 

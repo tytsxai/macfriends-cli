@@ -2,12 +2,29 @@
 set -euo pipefail
 umask 077
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -d "$SCRIPT_DIR/bin" ] && [ -d "$SCRIPT_DIR/bundle" ]; then
+  ROOT_DIR="$SCRIPT_DIR"
+else
+  ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+fi
 PREFIX="${PREFIX:-$HOME/.local}"
 BIN_DIR="$PREFIX/bin"
 APP_SUPPORT="$HOME/Library/Application Support/MacFriends"
 BUNDLE_DIR="$APP_SUPPORT/bundle"
 BUNDLE_BIN_DIR="$BUNDLE_DIR/bin"
+
+if [ -f "$ROOT_DIR/bin/macfriends" ]; then
+  CLI_BIN="$ROOT_DIR/bin/macfriends"
+  AGENT_DYLIB="$ROOT_DIR/bundle/bin/libmacfriends_agent.dylib"
+  AGENT_HOST="$ROOT_DIR/bundle/bin/macfriends-host"
+  ADAPTER_MANIFEST="$ROOT_DIR/bundle/adapter.wechat-macos-arm64.json"
+else
+  CLI_BIN="$ROOT_DIR/target/release/macfriends"
+  AGENT_DYLIB="$ROOT_DIR/native/agent/build/libmacfriends_agent.dylib"
+  AGENT_HOST="$ROOT_DIR/native/agent/build/macfriends-host"
+  ADAPTER_MANIFEST="$ROOT_DIR/fixtures/adapter.wechat-macos-arm64.json"
+fi
 
 require_file() {
   local path="$1"
@@ -27,10 +44,10 @@ backup_path() {
   /usr/bin/ditto "$src" "$backup"
 }
 
-require_file "$ROOT_DIR/target/release/macfriends"
-require_file "$ROOT_DIR/native/agent/build/libmacfriends_agent.dylib"
-require_file "$ROOT_DIR/native/agent/build/macfriends-host"
-require_file "$ROOT_DIR/fixtures/adapter.wechat-macos-arm64.json"
+require_file "$CLI_BIN"
+require_file "$AGENT_DYLIB"
+require_file "$AGENT_HOST"
+require_file "$ADAPTER_MANIFEST"
 
 install -d -m 700 "$BIN_DIR" "$APP_SUPPORT" "$BUNDLE_DIR" "$BUNDLE_BIN_DIR"
 
@@ -41,11 +58,11 @@ TMP_BIN="$(mktemp "$BIN_DIR/.macfriends.install.XXXXXX")"
 TMP_BUNDLE="$(mktemp -d "$APP_SUPPORT/.bundle.install.XXXXXX")"
 trap 'rm -f "$TMP_BIN"; rm -rf "$TMP_BUNDLE"' EXIT
 
-install -m 755 "$ROOT_DIR/target/release/macfriends" "$TMP_BIN"
+install -m 755 "$CLI_BIN" "$TMP_BIN"
 install -d -m 700 "$TMP_BUNDLE/bin"
-install -m 755 "$ROOT_DIR/native/agent/build/libmacfriends_agent.dylib" "$TMP_BUNDLE/bin/libmacfriends_agent.dylib"
-install -m 755 "$ROOT_DIR/native/agent/build/macfriends-host" "$TMP_BUNDLE/bin/macfriends-host"
-install -m 644 "$ROOT_DIR/fixtures/adapter.wechat-macos-arm64.json" "$TMP_BUNDLE/adapter.wechat-macos-arm64.json"
+install -m 755 "$AGENT_DYLIB" "$TMP_BUNDLE/bin/libmacfriends_agent.dylib"
+install -m 755 "$AGENT_HOST" "$TMP_BUNDLE/bin/macfriends-host"
+install -m 644 "$ADAPTER_MANIFEST" "$TMP_BUNDLE/adapter.wechat-macos-arm64.json"
 
 mv "$TMP_BIN" "$BIN_DIR/macfriends"
 rm -rf "$BUNDLE_DIR"

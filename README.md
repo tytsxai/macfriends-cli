@@ -19,7 +19,9 @@ MacFriends 是一个**独立维护的 macOS 微信好友关系检测 CLI 工具*
 ## 当前能力
 
 本仓库已经提供：
-- 完整 CLI：`doctor` / `prepare` / `launch` / `attach` / `profile` / `contacts` / `scan` / `export` / `detach` / `cleanup`
+- 完整 CLI：`doctor` / `status` / `prepare` / `launch` / `attach` / `profile` / `contacts` / `scan` / `export` / `detach` / `cleanup` / `serve`
+- 中文优先使用体验：命令说明、Web 控制台、状态标签、操作文档均面向中文用户；常用命令提供中文别名
+- 本地 Web 控制台：`macfriends serve --open` 或 `macfriends 控制台 --open`，提供状态总览、操作按钮、日志查看和 HTTP API
 - 单版本 adapter manifest：`WeChat 4.1.8 + arm64 + signature_scan`
 - 受控副本准备、ad-hoc 签名、Unix Domain Socket IPC、结果导出
 - 版本门禁、target status 持久化、运行态 Ready 门禁、固定错误码
@@ -58,9 +60,11 @@ MacFriends 是一个**独立维护的 macOS 微信好友关系检测 CLI 工具*
 cargo build
 make -C native/agent artifacts
 cargo run -p macfriends -- doctor
+cargo run -p macfriends -- status
 cargo run -p macfriends -- prepare
 cargo run -p macfriends -- launch --login
 cargo run -p macfriends -- attach
+cargo run -p macfriends -- serve --open
 ```
 
 ## 安装与发布
@@ -72,10 +76,13 @@ make package
 
 详细说明见 `docs/install.md` 与 `docs/operations.md`。
 
+中文用户建议先看 [docs/中文用户指南.md](docs/中文用户指南.md)。
+
 ## 命令
 
 ```bash
 macfriends doctor
+macfriends status
 macfriends prepare [--source-app /Applications/WeChat.app] [--force]
 macfriends launch --login
 macfriends attach
@@ -86,6 +93,19 @@ macfriends export --format json
 macfriends export --format csv
 macfriends detach
 macfriends cleanup
+macfriends serve [--addr 127.0.0.1:8765] [--open]
+```
+
+常用中文别名也可直接使用：
+
+```bash
+macfriends 状态
+macfriends 准备
+macfriends 启动 --login
+macfriends 连接
+macfriends 扫描 --all
+macfriends 导出 --format csv
+macfriends 控制台 --open
 ```
 
 ## 版本策略
@@ -152,6 +172,56 @@ cargo run -p macfriends -- attach --json
 `make ready` 会执行 `cargo fmt --check`、`cargo clippy --all-targets --all-features -- -D warnings`、测试、fixture smoke、构建与打包。
 
 若 `primitive_resolution` 仍是 `unresolved`，则说明核心真实原语尚未闭环，项目仍不可上线。
+
+## 日常使用闭环
+
+`macfriends status` 是日常入口，会一次性展示：
+- 当前生命周期：`not_prepared` / `prepared` / `running_blocked` / `ready`
+- 本机微信版本、受控副本版本、当前 adapter 锁定版本和兼容提示
+- 受控进程 PID、运行态 Ready、fixture 状态、release blockers
+- 最近一次生产扫描与 fixture 扫描摘要
+- 结果目录、CLI 日志、agent 日志、socket 路径
+- 下一步动作建议
+
+推荐路径：
+
+```bash
+macfriends status
+macfriends prepare
+macfriends launch --login
+macfriends attach
+macfriends scan --all
+macfriends export --format csv
+```
+
+CSV 导出会对可能被表格软件识别为公式的昵称、备注等字段做中和处理，降低本地打开导出文件时的误执行风险。
+
+## 本地 Web 控制台
+
+```bash
+macfriends serve --open
+# 或
+macfriends 控制台 --open
+```
+
+控制台默认监听 `127.0.0.1:8765`，只服务本机浏览器。页面按钮调用同一个 CLI 后端，不维护第二套业务逻辑。
+
+可用接口包括：
+- `GET /api/status`
+- `GET /api/compatibility`
+- `GET /api/doctor`
+- `GET /api/attach`
+- `GET /api/profile`
+- `GET /api/contacts`
+- `GET /api/logs?kind=cli|agent`
+- `POST /api/prepare`
+- `POST /api/launch`
+- `POST /api/scan`
+- `POST /api/export`
+- `POST /api/detach`
+- `POST /api/cleanup`
+
+详细说明见 `docs/web-console.md`。
 
 ## FAQ
 

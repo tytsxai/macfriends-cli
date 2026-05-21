@@ -3,8 +3,10 @@
 ## 总体架构
 
 MacFriends 由两部分组成：
-- `crates/cli`：Rust CLI，负责环境检查、受控副本准备、启动编排、target status、RPC 客户端、结果导出
+- `crates/cli`：Rust CLI，负责环境检查、状态总览、受控副本准备、启动编排、target status、RPC 客户端、结果导出
 - `native/agent`：Objective-C++ 动态库，通过 `DYLD_INSERT_LIBRARIES` 预加载进受控目标进程，提供本地 Unix Socket RPC
+
+`serve` 命令会在本机启动一个轻量 HTTP 控制台。Web API 不直接重写业务逻辑，而是调用当前 `macfriends --json` 子命令，因此 CLI、Web、脚本自动化共享同一套后端判断、错误码和 Ready 门禁。
 
 ## 版本化适配
 
@@ -25,6 +27,25 @@ agent 内部职责分层：
 5. 生产运行态由 `WeChatAppEx 2.4.1.19024` 承接；主 `WeChat 4.1.8` 主要负责拉起运行时组件
 6. agent 在受支持运行时组件内启动 Unix Domain Socket 服务
 7. CLI 通过 JSON RPC 调用 `status/profile/contacts/scan/stop`
+
+`macfriends status` 不依赖单一运行态来源，会同时读取：
+- `target-status.json`
+- `run-state.json`
+- agent socket 探活结果
+- 最近生产/fixture 扫描结果
+- 日志与结果目录路径
+
+因此它适合作为用户日常入口和自动化巡检入口。`doctor` 偏环境与 Ready 门禁，`attach` 偏活体 agent 详情，`status` 偏产品级闭环视图。
+
+## Web 控制台链路
+
+1. `macfriends serve` 监听 `127.0.0.1:8765` 或用户传入的 `--addr`
+2. 浏览器加载内置 HTML 控制台
+3. 控制台调用 `/api/status`、`/api/prepare`、`/api/launch` 等本地 HTTP API
+4. Web 后端调用当前二进制的 `macfriends --json <command>`
+5. API 将 CLI 输出包装为 `{ ok, command, exit_code, data|error, stderr }`
+
+这个设计让 Web 页面不会绕过 CLI 的生产门禁。若 native agent 返回 `profile_primitive_unresolved` 等错误，页面和 API 都会如实呈现。
 
 ## 当前适配边界
 

@@ -3,9 +3,10 @@ use crate::export;
 use crate::layout::AppLayout;
 use crate::model::{
     AdapterManifest, AgentStatus, Contact, DoctorReport, GenericMessage, LaunchReport, PathStatus,
-    PrepareReport, PrimitiveResolution, Profile, RunState, ScanReport, TargetStatus, ToolReport,
+    PrepareReport, PrimitiveResolution, Profile, RunState, RunStateSummary, ScanReport,
+    ScanSnapshot, StatusPaths, StatusReport, TargetStatus, ToolReport,
 };
-use crate::{rpc, util};
+use crate::{rpc, util, web};
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use serde_json::json;
@@ -27,6 +28,7 @@ const STABLE_AGENT_PING_SUCCESSES: usize = 3;
 pub fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Command::Doctor => doctor(cli.json),
+        Command::Status => status(cli.json),
         Command::Prepare(args) => prepare(cli.json, args),
         Command::Launch(args) => launch(cli.json, args),
         Command::Attach => attach(cli.json),
@@ -36,6 +38,7 @@ pub fn run(cli: Cli) -> Result<()> {
         Command::Export(args) => export_results(cli.json, args),
         Command::Detach => detach(cli.json),
         Command::Cleanup => cleanup(cli.json),
+        Command::Serve(args) => web::serve(args),
     }
 }
 
@@ -180,7 +183,7 @@ fn doctor(json_output: bool) -> Result<()> {
         let blockers = format_release_blockers(&report.release_blockers);
         let primitive = format_primitive_resolution(report.primitive_resolution.as_ref());
         format!(
-            "MacFriends Doctor\n- OS: {}\n- Arch: {}\n- Installed WeChat: {}\n- Managed WeChat: {}\n- Target Version: {}\n- Target Supported: {}\n- Runtime Ready: {}\n- Fixture Enabled: {}\n- Adapter: {}\n- Reason: {}\n- Primitive Resolution: {}\n- Socket: {}{}",
+            "MacFriends 检查\n- 系统: {}\n- 架构: {}\n- 已安装微信: {}\n- 受控微信: {}\n- 目标版本: {}\n- 目标是否支持: {}\n- 运行态 Ready: {}\n- Fixture 测试模式: {}\n- Adapter: {}\n- 原因: {}\n- 原语解析: {}\n- Socket: {}{}",
             report.os,
             report.arch,
             report
@@ -202,6 +205,101 @@ fn doctor(json_output: bool) -> Result<()> {
             blockers,
         )
     })
+}
+
+fn status(json_output: bool) -> Result<()> {
+    let layout = AppLayout::detect()?;
+    let adapter = read_adapter_template(&layout)?;
+    let source_status = assess_path(Path::new(DEFAULT_SOURCE_APP), &adapter);
+    let target_status = util::read_json_file(&layout.target_status)
+        .unwrap_or_else(|_| assess_path(&layout.managed_app, &adapter));
+    let live_status = agent_status_if_running(&layout);
+    let run_state = read_run_state_if_exists(&layout)?;
+    let mut release_blockers = collect_release_blockers(&target_status, live_status.as_ref());
+    let runtime_ready = live_status
+        .as_ref()
+        .is_some_and(|status| status.runtime_ready);
+    let fixture_enabled = live_status
+        .as_ref()
+        .is_some_and(|status| status.fixture_enabled);
+    let run_summary = run_state.as_ref().map(run_state_summary);
+    let lifecycle = lifecycle_label(
+        &layout,
+        &target_status,
+        live_status.as_ref(),
+        run_summary.as_ref(),
+        &release_blockers,
+    );
+    let last_production_scan = match scan_snapshot_if_exists(&layout.latest_scan) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            release_blockers.push(format!("无法读取最近生产扫描结果：{error}"));
+            None
+        }
+    };
+    let last_fixture_scan = match scan_snapshot_if_exists(&layout.latest_fixture_scan) {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            release_blockers.push(format!("无法读取最近 fixture 扫描结果：{error}"));
+            None
+        }
+    };
+    release_blockers.sort();
+    release_blockers.dedup();
+    let compatibility_warnings =
+        collect_compatibility_warnings(&source_status, &target_status, &layout, &adapter);
+    let next_actions = next_actions(
+        &layout,
+        &target_status,
+        live_status.as_ref(),
+        &release_blockers,
+        last_production_scan.as_ref(),
+    );
+
+    let report = StatusReport {
+        lifecycle_label: lifecycle_label_zh(&lifecycle).into(),
+        lifecycle,
+        supported_wechat_version: adapter.build_target.clone(),
+        installed_wechat_version: source_status.source_version.clone(),
+        managed_wechat_version: target_status.managed_version.clone(),
+        target_supported: target_status.target_supported,
+        runtime_ready,
+        fixture_enabled,
+        run_state: run_summary,
+        last_production_scan,
+        last_fixture_scan,
+        paths: StatusPaths {
+            root: layout.root.display().to_string(),
+            runtime_dir: layout.runtime_dir.display().to_string(),
+            result_dir: layout.result_dir.display().to_string(),
+            cli_log: layout.cli_log_file().display().to_string(),
+            agent_log: layout.agent_log_file().display().to_string(),
+            socket: layout.socket_path.display().to_string(),
+        },
+        release_blockers,
+        compatibility_warnings,
+        next_actions,
+    };
+
+    log_command(
+        &layout,
+        "status",
+        if report.release_blockers.is_empty() {
+            "ok"
+        } else {
+            "blocked"
+        },
+        json!({
+            "lifecycle": report.lifecycle,
+            "lifecycle_label": report.lifecycle_label,
+            "target_supported": report.target_supported,
+            "runtime_ready": report.runtime_ready,
+            "fixture_enabled": report.fixture_enabled,
+            "release_blockers": report.release_blockers,
+            "compatibility_warnings": report.compatibility_warnings,
+        }),
+    );
+    util::print_output(json_output, &report, || human_status_report(&report))
 }
 
 fn prepare(json_output: bool, args: PrepareArgs) -> Result<()> {
@@ -283,30 +381,25 @@ fn prepare(json_output: bool, args: PrepareArgs) -> Result<()> {
     );
     util::print_output(json_output, &report, || {
         let mut lines = vec![
-            "MacFriends Prepare 完成".to_string(),
-            format!("- Managed App: {}", report.managed_app),
-            format!("- Target Version: {}", report.target_version),
+            "MacFriends 准备完成".to_string(),
+            format!("- 受控微信副本: {}", report.managed_app),
+            format!("- 目标版本: {}", report.target_version),
             format!(
                 "- Bundle ID: {}",
                 report.bundle_id.clone().unwrap_or_default()
             ),
             format!("- Arch: {}", report.arch),
-            format!("- Version Match: {}", yes_no(report.version_match)),
-            format!("- Target Supported: {}", yes_no(report.target_supported)),
-            format!("- Runtime Ready: {}", yes_no(report.runtime_ready)),
-            format!("- Signature: {}", report.signature_status),
+            format!("- 版本匹配: {}", yes_no_zh(report.version_match)),
+            format!("- 目标是否支持: {}", yes_no_zh(report.target_supported)),
+            format!("- 运行态 Ready: {}", yes_no_zh(report.runtime_ready)),
+            format!("- 签名状态: {}", report.signature_status),
         ];
-        lines.extend(
-            report
-                .warnings
-                .iter()
-                .map(|item| format!("- Warning: {item}")),
-        );
+        lines.extend(report.warnings.iter().map(|item| format!("- 警告: {item}")));
         lines.extend(
             report
                 .release_blockers
                 .iter()
-                .map(|item| format!("- Release Blocker: {item}")),
+                .map(|item| format!("- 阻塞项: {item}")),
         );
         lines.join("\n")
     })
@@ -488,7 +581,7 @@ fn profile(json_output: bool) -> Result<()> {
     );
     util::print_output(json_output, &profile, || {
         format!(
-            "Profile\n- wxid: {}\n- nickname: {}\n- signature: {}",
+            "当前账号资料\n- wxid: {}\n- 昵称: {}\n- 签名: {}",
             profile.wxid,
             profile.nickname,
             profile.signature.clone().unwrap_or_default()
@@ -512,7 +605,7 @@ fn contacts(json_output: bool) -> Result<()> {
             .map(|item| format!("- {} ({})", item.nickname, item.wxid))
             .collect::<Vec<_>>()
             .join("\n");
-        format!("Contacts: {}\n{}", contacts.len(), preview)
+        format!("联系人: {}\n{}", contacts.len(), preview)
     })
 }
 
@@ -592,7 +685,7 @@ fn scan(json_output: bool, args: ScanArgs) -> Result<()> {
             .collect::<Vec<_>>()
             .join("\n");
         format!(
-            "Scan 完成\n- Mode: {}\n{summary}\n- 保存到: {}",
+            "扫描完成\n- 模式: {}\n{summary}\n- 保存到: {}",
             report.mode,
             output_path.display()
         )
@@ -627,7 +720,7 @@ fn export_results(json_output: bool, args: ExportArgs) -> Result<()> {
     );
     util::print_output(json_output, &export_report, || {
         format!(
-            "Export 完成\n- format: {}\n- output: {}\n- records: {}",
+            "导出完成\n- 格式: {}\n- 输出: {}\n- 记录数: {}",
             export_report.format, export_report.output, export_report.records
         )
     })
@@ -806,8 +899,225 @@ fn human_status(target_status: &TargetStatus, status: &AgentStatus) -> String {
     )
 }
 
+fn human_status_report(report: &StatusReport) -> String {
+    let run_state = report
+        .run_state
+        .as_ref()
+        .map(|state| {
+            format!(
+                "\n- PID: {}{} (运行中: {})",
+                state.pid,
+                format_runtime_pid(state.runtime_pid),
+                yes_no_zh(state.pid_running || state.runtime_pid_running)
+            )
+        })
+        .unwrap_or_default();
+    let last_scan = report
+        .last_production_scan
+        .as_ref()
+        .map(|scan| {
+            format!(
+                "\n- 最近生产扫描: {} 条记录，时间 {}",
+                scan.records,
+                scan.scanned_at.to_rfc3339()
+            )
+        })
+        .unwrap_or_else(|| "\n- 最近生产扫描: 无".into());
+    let blockers = format_release_blockers(&report.release_blockers);
+    let compatibility = if report.compatibility_warnings.is_empty() {
+        String::new()
+    } else {
+        report
+            .compatibility_warnings
+            .iter()
+            .map(|item| format!("\n- 兼容提示: {item}"))
+            .collect::<String>()
+    };
+    let actions = if report.next_actions.is_empty() {
+        String::new()
+    } else {
+        report
+            .next_actions
+            .iter()
+            .map(|item| format!("\n- 下一步: {item}"))
+            .collect::<String>()
+    };
+
+    format!(
+        "MacFriends 状态\n- 当前阶段: {} ({})\n- 支持的微信版本: {}\n- 已安装微信版本: {}\n- 受控微信版本: {}\n- 目标版本支持: {}\n- 运行态 Ready: {}\n- Fixture 测试模式: {}{}{}\n- 结果目录: {}\n- CLI 日志: {}\n- Agent 日志: {}{}{}{}",
+        report.lifecycle_label,
+        report.lifecycle,
+        report.supported_wechat_version,
+        report
+            .installed_wechat_version
+            .clone()
+            .unwrap_or_else(|| "unknown".into()),
+        report
+            .managed_wechat_version
+            .clone()
+            .unwrap_or_else(|| "unknown".into()),
+        yes_no_zh(report.target_supported),
+        yes_no_zh(report.runtime_ready),
+        yes_no_zh(report.fixture_enabled),
+        run_state,
+        last_scan,
+        report.paths.result_dir,
+        report.paths.cli_log,
+        report.paths.agent_log,
+        blockers,
+        compatibility,
+        actions,
+    )
+}
+
+fn lifecycle_label_zh(lifecycle: &str) -> &'static str {
+    match lifecycle {
+        "ready" => "可正式使用",
+        "running_blocked" => "已启动但未满足生产条件",
+        "process_without_agent" => "进程存在但 agent 未连接",
+        "prepared" => "已准备，等待启动",
+        "prepared_blocked" => "已准备但目标不匹配",
+        "not_prepared" => "尚未准备",
+        _ => "未知状态",
+    }
+}
+
+fn lifecycle_label(
+    layout: &AppLayout,
+    target_status: &TargetStatus,
+    live_status: Option<&AgentStatus>,
+    run_state: Option<&RunStateSummary>,
+    release_blockers: &[String],
+) -> String {
+    if live_status.is_some() && release_blockers.is_empty() {
+        return "ready".into();
+    }
+    if live_status.is_some() {
+        return "running_blocked".into();
+    }
+    if run_state.is_some_and(|state| state.pid_running || state.runtime_pid_running) {
+        return "process_without_agent".into();
+    }
+    if layout.managed_app.exists() && target_status.target_supported {
+        return "prepared".into();
+    }
+    if layout.managed_app.exists() {
+        return "prepared_blocked".into();
+    }
+    "not_prepared".into()
+}
+
+fn next_actions(
+    layout: &AppLayout,
+    target_status: &TargetStatus,
+    live_status: Option<&AgentStatus>,
+    release_blockers: &[String],
+    last_production_scan: Option<&ScanSnapshot>,
+) -> Vec<String> {
+    let mut actions = Vec::new();
+    if !layout.managed_app.exists() {
+        actions.push("运行 macfriends 准备，创建受控微信副本。".into());
+        return actions;
+    }
+    if !target_status.target_supported {
+        actions.push("确认源微信为 4.1.8 arm64 后运行 macfriends 准备 --force。".into());
+        return actions;
+    }
+    let Some(status) = live_status else {
+        actions.push("运行 macfriends 启动 --login，然后执行 macfriends 连接 验证运行态。".into());
+        return actions;
+    };
+    if status.fixture_enabled {
+        actions.push("退出 fixture host，改用 macfriends 启动 --login 启动正式链路。".into());
+    }
+    if !status.runtime_ready || !release_blockers.is_empty() {
+        actions.push(
+            "查看 agent 日志和阻塞项，先让 runtime_ready=true 且 release_blockers=[]。".into(),
+        );
+    }
+    if status.runtime_ready && !status.fixture_enabled && release_blockers.is_empty() {
+        actions.push("运行 macfriends 扫描 --all 生成生产扫描结果。".into());
+        if last_production_scan.is_some() {
+            actions.push(
+                "运行 macfriends 导出 --format csv 或 --format json 导出最近生产结果。".into(),
+            );
+        }
+    }
+    actions
+}
+
+fn collect_compatibility_warnings(
+    source_status: &TargetStatus,
+    managed_status: &TargetStatus,
+    layout: &AppLayout,
+    adapter: &AdapterManifest,
+) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if !Path::new(DEFAULT_SOURCE_APP).exists() {
+        warnings.push(
+            "默认位置未找到 /Applications/WeChat.app；如果微信装在其他位置，准备时使用 --source-app 指定。"
+                .into(),
+        );
+    } else if let Some(version) = &source_status.source_version {
+        if version != &adapter.build_target {
+            warnings.push(format!(
+                "本机已安装微信版本为 {version}，当前 adapter 只锁定支持 {}；微信升级后需要新 adapter，或使用受支持版本重新准备。",
+                adapter.build_target
+            ));
+        }
+    } else {
+        warnings.push("无法读取本机微信版本；请确认 WeChat.app 完整且 Info.plist 可读。".into());
+    }
+
+    if layout.managed_app.exists() && !managed_status.target_supported {
+        warnings.push(format!(
+            "当前受控副本未通过版本/架构门禁，原因为 {}；请确认源微信版本后运行 macfriends 准备 --force。",
+            managed_status
+                .reason
+                .clone()
+                .unwrap_or_else(|| "unknown".into())
+        ));
+    }
+
+    warnings.sort();
+    warnings.dedup();
+    warnings
+}
+
+fn run_state_summary(run_state: &RunState) -> RunStateSummary {
+    RunStateSummary {
+        pid: run_state.pid,
+        runtime_pid: run_state.runtime_pid,
+        pid_running: util::pid_is_running(run_state.pid),
+        runtime_pid_running: run_state.runtime_pid.is_some_and(util::pid_is_running),
+        started_at: run_state.started_at,
+        socket_path: run_state.socket_path.clone(),
+        agent_attached: run_state.agent_attached,
+    }
+}
+
+fn scan_snapshot_if_exists(path: &Path) -> Result<Option<ScanSnapshot>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let report: ScanReport = util::read_json_file(path)
+        .with_context(|| format!("无法读取扫描结果快照: {}", path.display()))?;
+    Ok(Some(ScanSnapshot {
+        path: path.display().to_string(),
+        mode: report.mode,
+        run_id: report.run_id,
+        scanned_at: report.scanned_at,
+        records: report.records.len(),
+        summary: report.summary,
+    }))
+}
+
 fn yes_no(flag: bool) -> &'static str {
     if flag { "yes" } else { "no" }
+}
+
+fn yes_no_zh(flag: bool) -> &'static str {
+    if flag { "是" } else { "否" }
 }
 
 fn collect_release_blockers(
@@ -869,7 +1179,7 @@ fn format_release_blockers(blockers: &[String]) -> String {
     } else {
         blockers
             .iter()
-            .map(|item| format!("\n- Release Blocker: {item}"))
+            .map(|item| format!("\n- 阻塞项: {item}"))
             .collect::<String>()
     }
 }

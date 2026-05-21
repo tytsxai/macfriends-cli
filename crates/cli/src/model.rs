@@ -27,6 +27,57 @@ pub struct DoctorReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StatusReport {
+    pub lifecycle: String,
+    pub lifecycle_label: String,
+    pub supported_wechat_version: String,
+    pub installed_wechat_version: Option<String>,
+    pub managed_wechat_version: Option<String>,
+    pub target_supported: bool,
+    pub runtime_ready: bool,
+    pub fixture_enabled: bool,
+    pub run_state: Option<RunStateSummary>,
+    pub last_production_scan: Option<ScanSnapshot>,
+    pub last_fixture_scan: Option<ScanSnapshot>,
+    pub paths: StatusPaths,
+    pub release_blockers: Vec<String>,
+    pub compatibility_warnings: Vec<String>,
+    pub next_actions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RunStateSummary {
+    pub pid: u32,
+    #[serde(default)]
+    pub runtime_pid: Option<u32>,
+    pub pid_running: bool,
+    pub runtime_pid_running: bool,
+    pub started_at: DateTime<Utc>,
+    pub socket_path: String,
+    pub agent_attached: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScanSnapshot {
+    pub path: String,
+    pub mode: String,
+    pub run_id: String,
+    pub scanned_at: DateTime<Utc>,
+    pub records: usize,
+    pub summary: BTreeMap<String, usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StatusPaths {
+    pub root: String,
+    pub runtime_dir: String,
+    pub result_dir: String,
+    pub cli_log: String,
+    pub agent_log: String,
+    pub socket: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolReport {
     pub clang: bool,
     pub codesign: bool,

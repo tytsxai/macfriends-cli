@@ -16,6 +16,8 @@ make install-local
 
 如果你是在仓库里开发而不是使用发布包，`prepare --force` 会优先同步当前仓库构建出的 native agent/host，而不是继续复用旧的 `bundle/` 资产。
 
+从源码仓库执行 `make install-local` 时，安装脚本会读取 `target/release/macfriends` 与 `native/agent/build/`。从发布 tar 包解压后执行 `./install.sh` 时，安装脚本会读取包内 `bin/` 与 `bundle/`，不要求用户保留源码树。
+
 ## 打包发布
 
 在项目根目录执行：
@@ -36,17 +38,22 @@ dist/macfriends-0.1.0-macos-arm64.tar.gz.sha256
 - native agent dylib
 - agent host
 - 锁定版本 manifest
-- README / CHANGELOG / LICENSE / docs
+- README / CHANGELOG / LICENSE / llms.txt / docs
 - `install.sh`
 
 ## 安装后的使用
 
 ```bash
 macfriends doctor
+macfriends status
+macfriends 状态
 macfriends prepare
 macfriends launch --login
 macfriends attach
+macfriends serve --open
 ```
+
+中文用户完整路径见 `docs/中文用户指南.md`。
 
 ## Ready 校验
 
@@ -54,6 +61,7 @@ macfriends attach
 
 ```bash
 macfriends doctor --json
+macfriends status --json
 macfriends launch --login --json
 macfriends attach --json
 ```
@@ -65,5 +73,7 @@ macfriends attach --json
 - `error_code`
 - `message`
 - `causes`
+
+日常排障建议优先运行 `macfriends status --json`，它会汇总生命周期、最近生产扫描、日志路径、socket 路径和下一步动作。
 
 安装脚本会先校验构建产物是否齐全，再以临时文件/目录完成原子替换，避免安装过程中留下半更新状态。

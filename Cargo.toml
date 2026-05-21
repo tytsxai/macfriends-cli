@@ -6,7 +6,7 @@ resolver = "2"
 edition = "2024"
 license = "MIT"
 authors = ["xiaomo"]
-repository = "https://github.com/tytsxai/WeFriends"
+repository = "https://github.com/tytsxai/macfriends-cli"
 
 [workspace.dependencies]
 anyhow = "1.0.98"

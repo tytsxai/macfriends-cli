@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- `macfriends status` as a product-level overview for lifecycle, run state, latest scan snapshots, paths, blockers, and next actions.
+- `macfriends serve` local Web console with HTTP APIs for status, prepare, launch, scan, export, detach, cleanup, and logs.
+- Chinese command aliases such as `状态`, `准备`, `启动`, `扫描`, `导出`, and `控制台`.
+- Chinese user guide at `docs/中文用户指南.md`.
+- Runtime compatibility warnings for installed WeChat version, managed copy version, and locked adapter version.
+- `/api/compatibility` and CORS preflight handling for the local Web API.
+
+### Changed
+- `scripts/install.sh` now supports both source-tree installation and direct installation from an extracted release package.
+- Fixture smoke now covers the new status command and Web API basics.
+- Web console labels and status text are now Chinese-first for local Chinese users.
+- Fixture smoke now exercises all primary Web API endpoints, including expected failure paths.
+
+### Security
+- CSV export now neutralizes spreadsheet-formula-looking contact fields before writing local CSV files.
+
 ## 0.1.1-beta - 2026-05-19
 
 ### Added (Documentation)

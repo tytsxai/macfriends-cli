@@ -5,3 +5,4 @@ pub mod layout;
 pub mod model;
 pub mod rpc;
 pub mod util;
+pub mod web;

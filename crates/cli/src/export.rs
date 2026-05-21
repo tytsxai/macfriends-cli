@@ -26,9 +26,9 @@ pub fn write_csv(report: &ScanReport, output: &Path) -> Result<ExportReport> {
     ])?;
     for record in &report.records {
         writer.write_record([
-            record.wxid.as_str(),
-            record.nickname.as_str(),
-            record.remark.as_deref().unwrap_or(""),
+            sanitize_csv_cell(&record.wxid).as_str(),
+            sanitize_csv_cell(&record.nickname).as_str(),
+            sanitize_csv_cell(record.remark.as_deref().unwrap_or("")).as_str(),
             match record.status {
                 crate::model::FriendStatus::Normal => "normal",
                 crate::model::FriendStatus::Deleted => "deleted",
@@ -48,6 +48,15 @@ pub fn write_csv(report: &ScanReport, output: &Path) -> Result<ExportReport> {
         output: output.display().to_string(),
         records: report.records.len(),
     })
+}
+
+fn sanitize_csv_cell(value: &str) -> String {
+    let trimmed = value.trim_start_matches([' ', '\t', '\r']);
+    if matches!(trimmed.as_bytes().first(), Some(b'=' | b'+' | b'-' | b'@')) {
+        format!("'{value}")
+    } else {
+        value.to_string()
+    }
 }
 
 #[cfg(test)]
@@ -108,5 +117,34 @@ mod tests {
         let content = std::fs::read_to_string(&path).unwrap();
         assert_eq!(export.records, 1);
         assert!(content.contains("wxid_1"));
+    }
+
+    #[test]
+    fn csv_export_neutralizes_spreadsheet_formulas() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("scan.csv");
+        let report = ScanReport {
+            mode: "production".into(),
+            run_id: "run-test".into(),
+            adapter_name: "wechat_4_1_8_arm64".into(),
+            source_version: "3.0.0".into(),
+            scanned_at: Utc::now(),
+            summary: BTreeMap::from([("unknown".to_string(), 1)]),
+            records: vec![FriendRecord {
+                wxid: "wxid_1".into(),
+                nickname: "=cmd".into(),
+                remark: Some(" @lookup".into()),
+                status: FriendStatus::Unknown,
+                status_code: "0x00".into(),
+                source_version: "3.0.0".into(),
+                scanned_at: Utc::now(),
+            }],
+        };
+
+        write_csv(&report, &path).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("'=cmd"));
+        assert!(content.contains("' @lookup"));
     }
 }

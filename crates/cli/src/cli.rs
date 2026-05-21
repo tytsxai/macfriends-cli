@@ -1,4 +1,5 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Parser)]
@@ -16,22 +17,52 @@ pub struct Cli {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum Command {
+    #[command(
+        visible_alias = "检查",
+        about = "检查本机环境、目标版本、Ready 门禁与阻塞项"
+    )]
     Doctor,
+    #[command(
+        visible_alias = "状态",
+        about = "汇总生命周期、运行态、最近扫描、路径与下一步动作"
+    )]
+    Status,
+    #[command(
+        visible_alias = "准备",
+        about = "创建或刷新受控微信副本并同步 agent 资产"
+    )]
     Prepare(PrepareArgs),
+    #[command(
+        visible_alias = "启动",
+        about = "启动受控微信副本并等待 agent socket 就绪"
+    )]
     Launch(LaunchArgs),
+    #[command(visible_alias = "连接", about = "连接当前 agent 并显示运行态详情")]
     Attach,
+    #[command(visible_alias = "资料", about = "读取当前登录账号资料")]
     Profile,
+    #[command(visible_alias = "联系人", about = "读取联系人列表")]
     Contacts,
+    #[command(visible_alias = "扫描", about = "扫描联系人关系并保存结果")]
     Scan(ScanArgs),
+    #[command(visible_alias = "导出", about = "导出最近一次生产扫描结果")]
     Export(ExportArgs),
+    #[command(visible_alias = "断开", about = "请求 agent 停止并断开连接")]
     Detach,
+    #[command(
+        visible_alias = "清理",
+        about = "清理本地运行态 pid、socket 与 run-state 文件"
+    )]
     Cleanup,
+    #[command(visible_alias = "控制台", about = "启动本地 Web 控制台与 HTTP API")]
+    Serve(ServeArgs),
 }
 
 impl Command {
     pub fn name(&self) -> &'static str {
         match self {
             Command::Doctor => "doctor",
+            Command::Status => "status",
             Command::Prepare(_) => "prepare",
             Command::Launch(_) => "launch",
             Command::Attach => "attach",
@@ -41,6 +72,7 @@ impl Command {
             Command::Export(_) => "export",
             Command::Detach => "detach",
             Command::Cleanup => "cleanup",
+            Command::Serve(_) => "serve",
         }
     }
 }
@@ -77,4 +109,12 @@ pub struct ExportArgs {
 pub enum ExportFormat {
     Json,
     Csv,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct ServeArgs {
+    #[arg(long, default_value = "127.0.0.1:8765", help = "监听地址")]
+    pub addr: SocketAddr,
+    #[arg(long, help = "启动后用默认浏览器打开控制台")]
+    pub open: bool,
 }
