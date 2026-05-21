@@ -30,6 +30,16 @@ MacFriends 是一个**独立维护的 macOS 微信好友关系检测 CLI 工具*
 - `prepare --force` 会刷新仓库内最新 native 资产，并清理历史运行目录残留
 - 本地安装脚本、回滚备份位与发布打包脚本
 
+## 界面截图
+
+### 中文本地控制台
+
+![MacFriends 中文本地控制台](docs/assets/macfriends-console-cn.jpg)
+
+### 状态 API 与兼容提示
+
+![MacFriends 状态 API](docs/assets/macfriends-api-status-cn.jpg)
+
 ## 上线判断
 
 只有当 `doctor --json` 或 `attach --json` 同时满足以下条件，才可视为达到生产 Ready：
