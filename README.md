@@ -1,76 +1,66 @@
-# MacFriends · macOS 微信好友关系检测 CLI
+# MacFriends · macOS 微信好友关系检测 CLI / WeChat Friend Inspector
 
-[![Release](https://img.shields.io/github/v/release/tytsxai/macfriends-cli)](https://github.com/tytsxai/macfriends-cli/releases) · [llms.txt](llms.txt) · [Issues](https://github.com/tytsxai/macfriends-cli/issues) · [License: MIT](LICENSE)
+[![Release](https://img.shields.io/github/v/release/tytsxai/macfriends-cli)](https://github.com/tytsxai/macfriends-cli/releases) · [English README](README.en.md) · [llms.txt](llms.txt) · [Docs](docs/README.md) · [Issues](https://github.com/tytsxai/macfriends-cli/issues) · [MIT License](LICENSE)
 
-> **关键词**:macOS 微信好友关系检测 · 微信单删检测 macOS · 微信清理僵尸粉 macOS · WeChat ghost contact macOS · Apple Silicon WeChat CLI · 受控副本 + Ad-hoc 签名 · Unix Domain Socket IPC · Rust + Objective-C++ agent
->
-> **English**: A maintainability-first macOS CLI for inspecting WeChat (微信) friend relationships on Apple Silicon. Spawns a controlled, ad-hoc-signed copy of WeChat, attaches an Obj-C++ agent over UDS IPC, and exposes profile / contacts / scan primitives — with version gates, fixed error codes, Ready signals, and rollback paths. Designed to be scripted, not GUI-clicked.
+MacFriends 是一个面向 **macOS Apple Silicon** 的本地微信好友关系检测与扫描框架，英文定位是 **local-first macOS WeChat friend relationship inspector CLI**。它用 Rust CLI 编排受控微信副本，用 Objective-C++ agent 通过 Unix Domain Socket 暴露 `profile`、`contacts`、`scan` 等本地原语，并提供 JSON/CSV 导出、本地 Web 控制台、Ready 门禁和可诊断错误码。
 
-MacFriends 是一个**独立维护的 macOS 微信好友关系检测 CLI 工具**，面向 Apple Silicon，聚焦本地运行、受控启动、结果导出与生产可运维能力。
+它解决的问题不是“云端一键查僵尸粉”，而是给需要在本机、可审计、可脚本化地检查微信联系人关系的开发者和高级用户一个明确边界的工具链：固定支持版本、失败原因可见、原始数据可导出、线上可用性有门禁。
 
-项目定位：
-- Rust CLI + Objective-C++ agent
-- 仅面向 macOS / Apple Silicon
-- 当前锁定 `WeChat 4.1.8 (arm64)`
-- 生产运行态实际附着在 `WeChatAppEx 2.4.1.19024`
-- 本地运行，不依赖云端服务
-- 强调 Ready 门禁、可诊断、可回滚、可维护
+> **SEO / Search keywords**: macOS 微信好友关系检测, 微信单删检测 macOS, 微信清理僵尸粉 macOS, WeChat friend checker CLI, WeChat ghost contact macOS, Apple Silicon WeChat tool, Rust macOS CLI, Objective-C++ agent, Unix Domain Socket IPC, ad-hoc signed WeChat copy.
 
-## 当前能力
+## 适合谁使用 / Who It Is For
 
-本仓库已经提供：
-- 完整 CLI：`doctor` / `status` / `prepare` / `launch` / `attach` / `profile` / `contacts` / `scan` / `export` / `detach` / `cleanup` / `serve`
-- 中文优先使用体验：命令说明、Web 控制台、状态标签、操作文档均面向中文用户；常用命令提供中文别名
-- 本地 Web 控制台：`macfriends serve --open` 或 `macfriends 控制台 --open`，提供状态总览、操作按钮、日志查看和 HTTP API
-- 单版本 adapter manifest：`WeChat 4.1.8 + arm64 + signature_scan`
-- 受控副本准备、ad-hoc 签名、Unix Domain Socket IPC、结果导出
-- 版本门禁、target status 持久化、运行态 Ready 门禁、固定错误码
-- `--json` 成功/失败统一结构化输出、CLI/agent 日志轮转
-- fixture 端到端 smoke、扫描结果留存上限、安装原子替换
-- `prepare --force` 会刷新仓库内最新 native 资产，并清理历史运行目录残留
-- 本地安装脚本、回滚备份位与发布打包脚本
+- 使用 Apple Silicon Mac，并且希望在本机检测微信好友关系、联系人状态或单删线索的高级用户。
+- 需要可脚本化、可导出、可排障的 `macfriends` CLI，而不是只能手点 GUI 的使用者。
+- 研究 macOS WeChat 本地自动化、受控副本、动态库注入、UDS IPC、Rust + Objective-C++ agent 架构的开发者。
+- 想基于固定版本 adapter 扩展 WeChat 原语解析、扫描结果导出或本地控制台的人。
 
-## 界面截图
+不适合：
 
-下面两张截图展示了 MacFriends 的主要产品形态，便于搜索 `macOS 微信好友关系检测`、`微信单删检测 macOS`、`WeChat friend checker CLI`、`WeChat ghost contact macOS` 的用户快速判断项目是否适合自己。
+- Intel Mac、Windows、Linux 用户。
+- 需要支持任意最新版微信的用户。
+- 期待项目代替你解释“谁删了我”的用户。MacFriends 导出原始 `contacts` / `scan` 数据，关系判断需要你自行处理。
+- 期待云端服务、商业背书或官方微信接口的用户。本项目不是腾讯/微信官方项目。
 
-### 中文本地控制台
+## 核心功能 / Core Features
 
-中文本地控制台截图：展示 `macfriends 控制台 --open` 启动后的本机 Web UI，可直接查看运行状态、微信版本兼容提示、阻塞项，并执行准备、启动、扫描、导出、断开和清理等操作。
+- **Rust CLI**: `doctor`, `status`, `prepare`, `launch`, `attach`, `profile`, `contacts`, `scan`, `export`, `detach`, `cleanup`, `serve`。
+- **中文命令别名**: `状态`, `准备`, `启动`, `连接`, `资料`, `联系人`, `扫描`, `导出`, `断开`, `清理`, `控制台`。
+- **受控微信副本**: `prepare` 会复制 `/Applications/WeChat.app` 到 MacFriends runtime 目录并 ad-hoc 签名，不修改原始微信。
+- **本地 agent 与 IPC**: Objective-C++ agent 通过 Unix Domain Socket 提供本地 JSON RPC。
+- **本地 Web 控制台**: `macfriends serve --open` / `macfriends 控制台 --open` 启动只监听 `127.0.0.1` 的中文控制台。
+- **结构化输出**: 支持 `--json`，成功和失败都返回可脚本处理的结构。
+- **结果导出**: 最近一次生产扫描可导出 JSON 或 CSV，CSV 会中和疑似表格公式字段。
+- **运维门禁**: `runtime_ready`, `fixture_enabled`, `release_blockers`, `primitive_resolution` 明确区分可用、测试和阻塞状态。
+- **固定错误码**: `version_mismatch`, `adapter_not_loaded`, `profile_primitive_unresolved`, `contacts_primitive_unresolved`, `scan_primitive_unresolved`, `rpc_timeout` 等。
+- **可打包安装**: `make install-local`, `make package`, `scripts/install.sh` 支持本地安装、发布包安装和上一版本备份。
 
-![MacFriends 中文本地控制台 - macOS 微信好友关系检测 Web UI](docs/assets/macfriends-console-cn.jpg)
+## 技术栈 / Tech Stack
 
-### 状态 API 与兼容提示
+| 层 | 技术 | 说明 |
+| --- | --- | --- |
+| CLI | Rust 2024, clap, serde, anyhow | 命令、状态聚合、导出、Web 后端编排 |
+| native agent | Objective-C++ | 注入受控微信运行态并处理本地原语请求 |
+| IPC | Unix Domain Socket | 默认 socket 在 `/tmp/macfriends-$USER/agent.sock` |
+| Web console | Rust 内置轻量 HTTP 服务 | 默认 `127.0.0.1:8765`，复用 CLI JSON 子命令 |
+| packaging | Makefile + shell scripts | 构建 native 资产、打包 tar.gz、安装到本机 |
 
-状态 API 截图：展示 `/api/status` 返回的结构化 JSON，包括 `lifecycle_label`、`supported_wechat_version`、`installed_wechat_version`、`compatibility_warnings`、`release_blockers` 和下一步建议，适合脚本、自动化或二次开发使用。
+## 当前状态与限制 / Current Status and Limits
 
-![MacFriends 状态 API - WeChat friend checker CLI JSON output](docs/assets/macfriends-api-status-cn.jpg)
+当前仓库是 `0.1.x` beta 阶段，已具备 CLI、受控副本、agent、fixture smoke、本地控制台、安装打包、日志和 Ready 门禁等工程闭环。
 
-## 上线判断
+重要限制：
 
-只有当 `doctor --json` 或 `attach --json` 同时满足以下条件，才可视为达到生产 Ready：
-- `runtime_ready=true`
-- `fixture_enabled=false`
-- `release_blockers=[]`
+- 只支持 **macOS + Apple Silicon (`arm64`)**。
+- 当前 adapter 锁定 **WeChat `4.1.8` + `com.tencent.xinWeChat` + `arm64` + `signature_scan`**。
+- 生产运行态实际附着点是 **WeChatAppEx `2.4.1.19024`**。
+- 当前源码中的真实私有原语解析仍以 `primitive_resolution=unresolved` 作为安全失败状态；看到 `profile_primitive_unresolved` / `contacts_primitive_unresolved` / `scan_primitive_unresolved` 时，不要把结果当成生产可用。
+- fixture 模式仅用于测试和 CI，不代表真实微信扫描结果。
+- 本项目不分发 WeChat 安装包，也不会自动跟进最新版微信。
 
-若目标不满足 bundle/version/arch 条件，命令会明确失败，错误码固定为：
-- `version_mismatch`
-- `adapter_not_loaded`
-- `resolver_validation_failed`
-- `profile_primitive_unresolved`
-- `contacts_primitive_unresolved`
-- `scan_primitive_unresolved`
-- `rpc_timeout`
+## 快速开始 / Quick Start
 
-## 目录
-
-- `crates/cli`：命令行、配置、导出、IPC 客户端
-- `native/agent`：macOS agent 动态库、受控宿主、版本 adapter
-- `docs`：架构、兼容性、安装、排障、运维文档
-- `fixtures`：锁定版本 adapter 模板
-- `scripts`：安装与打包脚本
-
-## 快速开始
+源码开发路径：
 
 ```bash
 cargo build
@@ -83,18 +73,51 @@ cargo run -p macfriends -- attach
 cargo run -p macfriends -- serve --open
 ```
 
-## 安装与发布
+本地安装：
 
 ```bash
 make install-local
+macfriends doctor
+macfriends status
+macfriends serve --open
+```
+
+常用中文路径：
+
+```bash
+macfriends 状态
+macfriends 准备
+macfriends 启动 --login
+macfriends 连接
+macfriends 扫描 --all
+macfriends 导出 --format csv
+macfriends 控制台 --open
+```
+
+发布包：
+
+```bash
 make package
 ```
 
-详细说明见 `docs/install.md` 与 `docs/operations.md`。
+输出示例：
 
-中文用户建议先看 [docs/中文用户指南.md](docs/中文用户指南.md)。
+```text
+dist/macfriends-0.1.0-macos-arm64.tar.gz
+dist/macfriends-0.1.0-macos-arm64.tar.gz.sha256
+```
 
-## 命令
+安装和发布细节见 [docs/install.md](docs/install.md) 与 [docs/operations.md](docs/operations.md)。
+
+## 使用场景 / Usage Scenarios
+
+- 在本机检查微信联系人关系，导出 JSON/CSV 后自行做差集、状态分析或审计。
+- 用 `macfriends status --json` 做自动化巡检，确认微信版本、受控副本、agent、阻塞项和下一步动作。
+- 用 `macfriends 控制台 --open` 给中文用户提供更直观的本地操作入口。
+- 基于 `fixtures/adapter.wechat-macos-arm64.json` 开发新的 WeChat 版本 adapter。
+- 研究受控 macOS App 副本、ad-hoc signing、DYLD 注入、Unix Socket agent 与 Rust CLI 的组合架构。
+
+## 命令速查 / Commands
 
 ```bash
 macfriends doctor
@@ -112,107 +135,64 @@ macfriends cleanup
 macfriends serve [--addr 127.0.0.1:8765] [--open]
 ```
 
-常用中文别名也可直接使用：
+`status` 是推荐日常入口，会汇总：
 
-```bash
-macfriends 状态
-macfriends 准备
-macfriends 启动 --login
-macfriends 连接
-macfriends 扫描 --all
-macfriends 导出 --format csv
-macfriends 控制台 --open
-```
-
-## 版本策略
-
-### 支持矩阵（v0.1.0）
-
-| 组件 | 支持值 | 来源 |
-| --- | --- | --- |
-| 架构 | `arm64`（Apple Silicon） | `fixtures/adapter.wechat-macos-arm64.json` |
-| WeChat bundle | `com.tencent.xinWeChat` | adapter manifest |
-| WeChat 版本 | **`4.1.8`** | adapter `build_target` |
-| 运行态 WeChatAppEx | `2.4.1.19024` | adapter |
-| 实现 | `signature_scan` | adapter `adapter_name` |
-
-新版本支持需要更新 `fixtures/adapter.wechat-macos-arm64.json` 并重新解析原语，不会自动跟进。
-
-### 版本不匹配时怎么办
-
-如果 `prepare` / `doctor` 报 `reason=version_mismatch`，按以下顺序处理：
-
-1. **确认当前微信版本**：
-   ```bash
-   defaults read /Applications/WeChat.app/Contents/Info CFBundleShortVersionString
-   ```
-2. **降级到 4.1.8**：
-   - 历史版本需要自行从 4.1.8 时期的本地备份 / Time Machine 快照 / 第三方旧版镜像取得 —— 本仓库不分发任何 WeChat 安装包
-   - 卸载现有微信前先备份 `~/Library/Containers/com.tencent.xinWeChat/`
-   - 安装 4.1.8 后再次跑 `macfriends prepare`
-3. **不愿降级**：等待本仓库发布新版本 adapter，或自行 fork 更新 `fixtures/adapter.wechat-macos-arm64.json` 中的 `build_target` 并重做原语解析（见 `docs/compatibility.md`）。
-
-- 若源微信版本与目标不匹配，`prepare` 会记录 `target-status.json`，后续 `attach/profile/contacts/scan` 将明确失败
-
-## 本地 Smoke Test
-
-fixture 模式只用于测试和 CI，不属于默认用户路径：
-
-```bash
-make -C native/agent artifacts
-MACFRIENDS_AGENT_SOCKET="$HOME/Library/Application Support/MacFriends/runtime/agent.sock" \
-MACFRIENDS_ADAPTER_PATH="$PWD/fixtures/adapter.wechat-macos-arm64.json" \
-MACFRIENDS_ENABLE_FIXTURE=1 \
-DYLD_INSERT_LIBRARIES="$PWD/native/agent/build/libmacfriends_agent.dylib" \
-"$PWD/native/agent/build/macfriends-host"
-```
-
-另一个终端执行：
-
-```bash
-cargo run -p macfriends -- attach
-cargo run -p macfriends -- profile
-cargo run -p macfriends -- contacts
-cargo run -p macfriends -- scan --all
-```
-
-## 生产发布门槛
-
-```bash
-make ready
-cargo run -p macfriends -- doctor --json
-cargo run -p macfriends -- launch --login --json
-cargo run -p macfriends -- attach --json
-```
-
-`make ready` 会执行 `cargo fmt --check`、`cargo clippy --all-targets --all-features -- -D warnings`、测试、fixture smoke、构建与打包。
-
-若 `primitive_resolution` 仍是 `unresolved`，则说明核心真实原语尚未闭环，项目仍不可上线。
-
-## 日常使用闭环
-
-`macfriends status` 是日常入口，会一次性展示：
-- 当前生命周期：`not_prepared` / `prepared` / `running_blocked` / `ready`
-- 本机微信版本、受控副本版本、当前 adapter 锁定版本和兼容提示
-- 受控进程 PID、运行态 Ready、fixture 状态、release blockers
+- 生命周期：`not_prepared` / `prepared` / `running_blocked` / `ready`
+- 本机微信版本、受控副本版本、adapter 锁定版本和兼容提示
+- agent socket、PID、fixture 状态、Ready 状态和 release blockers
 - 最近一次生产扫描与 fixture 扫描摘要
 - 结果目录、CLI 日志、agent 日志、socket 路径
 - 下一步动作建议
 
-推荐路径：
+## 版本策略 / Compatibility
 
-```bash
-macfriends status
-macfriends prepare
-macfriends launch --login
-macfriends attach
-macfriends scan --all
-macfriends export --format csv
+| 项 | 当前值 |
+| --- | --- |
+| 平台 | macOS |
+| 架构 | Apple Silicon `arm64` |
+| WeChat bundle | `com.tencent.xinWeChat` |
+| WeChat 版本 | `4.1.8` |
+| 运行态 WeChatAppEx | `2.4.1.19024` |
+| adapter | `wechat_4_1_8_arm64` |
+| resolver | `signature_scan` |
+
+如果 `prepare` / `doctor` 报 `reason=version_mismatch`：
+
+1. 确认当前微信版本：
+   ```bash
+   defaults read /Applications/WeChat.app/Contents/Info CFBundleShortVersionString
+   ```
+2. 确认是否能使用 `WeChat 4.1.8 arm64`。本仓库不提供 WeChat 安装包。
+3. 不愿降级时，等待或自行开发新 adapter。参考 [docs/compatibility.md](docs/compatibility.md)。
+
+## Ready 门禁 / Production Readiness
+
+只有 `doctor --json` 或 `attach --json` 同时满足以下条件，才可视为生产 Ready：
+
+```text
+runtime_ready = true
+fixture_enabled = false
+release_blockers = []
+primitive_resolution.profile = resolved
+primitive_resolution.contacts = resolved
+primitive_resolution.scan = resolved
 ```
 
-CSV 导出会对可能被表格软件识别为公式的昵称、备注等字段做中和处理，降低本地打开导出文件时的误执行风险。
+只要 `primitive_resolution` 仍是 `unresolved`、`blocked` 或 `fixture`，都不能把扫描结果当成真实生产结果。
 
-## 本地 Web 控制台
+发布前建议执行：
+
+```bash
+make ready
+cargo run -p macfriends -- doctor --json
+cargo run -p macfriends -- status --json
+cargo run -p macfriends -- launch --login --json
+cargo run -p macfriends -- attach --json
+```
+
+`make ready` 会执行格式检查、clippy、测试、构建、native agent 构建、fixture smoke 和打包。
+
+## 本地 Web 控制台 / Local Web Console
 
 ```bash
 macfriends serve --open
@@ -220,9 +200,14 @@ macfriends serve --open
 macfriends 控制台 --open
 ```
 
-控制台默认监听 `127.0.0.1:8765`，只服务本机浏览器。页面按钮调用同一个 CLI 后端，不维护第二套业务逻辑。
+默认监听：
 
-可用接口包括：
+```text
+http://127.0.0.1:8765
+```
+
+Web 控制台调用同一个 `macfriends --json` 后端，不维护第二套业务逻辑。常用接口包括：
+
 - `GET /api/status`
 - `GET /api/compatibility`
 - `GET /api/doctor`
@@ -237,32 +222,65 @@ macfriends 控制台 --open
 - `POST /api/detach`
 - `POST /api/cleanup`
 
-详细说明见 `docs/web-console.md`。
+更多说明见 [docs/web-console.md](docs/web-console.md)。
+
+## 截图 / Screenshots
+
+### 中文本地控制台
+
+![MacFriends 中文本地控制台 - macOS 微信好友关系检测 Web UI](docs/assets/macfriends-console-cn.jpg)
+
+### 状态 API 与兼容提示
+
+![MacFriends 状态 API - WeChat friend checker CLI JSON output](docs/assets/macfriends-api-status-cn.jpg)
+
+## 文档 / Documentation
+
+- [docs/README.md](docs/README.md): 文档导航和读者路径。
+- [docs/中文用户指南.md](docs/中文用户指南.md): 中文用户从控制台到 CLI 的完整路径。
+- [docs/install.md](docs/install.md): 安装、打包、发布包结构。
+- [docs/operations.md](docs/operations.md): 发布前检查、回滚、备份、诊断。
+- [docs/compatibility.md](docs/compatibility.md): 版本兼容矩阵与 adapter 边界。
+- [docs/architecture.md](docs/architecture.md): Rust CLI、native agent、Web 控制台和 Ready 门禁架构。
+- [docs/troubleshooting.md](docs/troubleshooting.md): 常见失败、错误码和排障路径。
+- [llms.txt](llms.txt): 给 AI 搜索引擎、LLM crawler 和引用系统使用的项目摘要。
 
 ## FAQ
 
-**Q:能不能像「测一测谁删了我」那样用?**
-原始数据(contacts + scan)拿到后,这种判断你自己做,工具不替你解释。
+**Q: 能不能用来做“微信单删检测”或“清理僵尸粉”？**
 
-**Q:会改我装的微信吗?**
-不会。`prepare` 在 runtime 目录里拷一份**受控副本**并 ad-hoc 重签名,启动的是副本,`/Applications/WeChat.app` 完全不动。
+可以作为本地原始数据采集工具使用，但它不替你解释关系。你需要基于导出的 `contacts` 和 `scan` 数据自行判断。
 
-**Q:微信升级了怎么办?**
-当前 manifest 锁死在 4.1.8(arm64)。升级后这工具会直接报 `version_mismatch` —— 这是**有意为之**的安全围栏。新版本需要更新 `fixtures/adapter.wechat-macos-arm64.json`。
+**Q: 会修改我安装的微信吗？**
 
-**Q:Intel Mac 行不行?**
-不行。只支持 Apple Silicon。
+不会。`prepare` 在 MacFriends runtime 目录创建受控副本并 ad-hoc 重签名，`/Applications/WeChat.app` 不会被修改。
 
-**Q:`primitive_resolution=unresolved` 是什么意思?**
-核心读取原语还没闭环。看到这个的版本**不要**上生产。
+**Q: 为什么只支持 WeChat 4.1.8？**
 
-**Q:怎么判断能上生产?**
-`doctor --json` 或 `attach --json` 同时满足 `runtime_ready=true` + `fixture_enabled=false` + `release_blockers=[]`。
+这是当前 adapter 的安全边界。微信版本、bundle、架构或运行态不匹配时，工具会明确失败，而不是冒险假装兼容。
 
-## 许可
+**Q: `primitive_resolution=unresolved` 是什么意思？**
 
-MIT，见 `LICENSE`。
+说明真实私有原语尚未解析闭环。此时 CLI/Web 会返回明确错误，不能视为生产扫描可用。
+
+**Q: 数据会上传吗？**
+
+不会。CLI、agent、Web 控制台都在本机运行。Web 控制台默认只监听 `127.0.0.1`。
+
+**Q: 支持 Intel Mac 吗？**
+
+不支持。当前只支持 Apple Silicon `arm64`。
+
+## GitHub Topics 建议
+
+如果你在 GitHub 上维护本项目，可考虑添加这些 topics 以增强搜索发现：
+
+`wechat`, `macos`, `apple-silicon`, `rust-cli`, `objective-cpp`, `friend-checker`, `unix-domain-socket`, `local-first`, `wechat-tool`, `cli-tool`
 
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=tytsxai/macfriends-cli&type=Date)](https://www.star-history.com/#tytsxai/macfriends-cli&Date)
+
+## License
+
+MIT，见 [LICENSE](LICENSE)。

@@ -1,63 +1,143 @@
 # MacFriends
 
-> macOS WeChat (微信) friend-relationship inspector CLI for Apple Silicon. Rust CLI orchestrates an Objective-C++ agent that attaches to a controlled WeChat copy (`WeChat 4.1.8 arm64` → `WeChatAppEx 2.4.1.19024` runtime), reads profile/contacts/scan primitives via a Unix Domain Socket, and exports results as JSON/CSV. Designed for *local operability* — version gates, ad-hoc signing, target-status persistence, Ready gating, fixed error codes, rollback paths.
+> AI-search summary: MacFriends is a local-first macOS WeChat friend relationship inspector CLI for Apple Silicon. It is a Rust + Objective-C++ project that prepares a controlled, ad-hoc-signed WeChat copy, injects a native agent into the supported runtime, communicates over Unix Domain Socket IPC, and exposes scriptable commands for status, profile, contacts, scan, export, diagnostics, and a local web console.
 
-This is **not** a one-click "find who removed me on WeChat" hack tool. It is a maintainability-first CLI built around the idea that any WeChat-binary-inspecting tool must:
+## Canonical project facts
 
-1. Declare exactly which WeChat version, architecture, and adapter strategy it supports
-2. Fail loud with a fixed error code when that contract is broken
-3. Run entirely on the user's local Mac with no cloud component
-4. Expose `doctor` / `status` / `attach` / `serve` / `--json` machine-checkable Ready signals before being trusted in production
-
-## Key docs
-
-- [README.md](README.md): CLI command list, Ready gating contract, version policy, local smoke-test instructions.
-- `docs/install.md`: Install paths (local install vs distribution package).
-- `docs/operations.md`: Production operations — Ready gates, rollback, log rotation.
-- `docs/troubleshooting.md`: Common failure modes (version mismatch, adapter not loaded, primitive unresolved, rpc timeout).
-- `docs/compatibility.md`: WeChat version compatibility matrix and adapter manifest schema.
-
-## What MacFriends does
-
-- Spawns a controlled, ad-hoc-signed copy of WeChat (so the original `/Applications/WeChat.app` stays untouched)
-- Attaches an Objective-C++ agent (`libmacfriends_agent.dylib`) that exposes primitives over Unix Domain Socket IPC
-- Lets you query profile / contacts / scan primitives from a Rust CLI (`macfriends`)
-- Exports results as JSON or CSV
-- Provides `macfriends status` as a single lifecycle / run-state / latest-scan / paths / next-actions overview
-- Provides `macfriends serve --open` as a local browser console backed by the same CLI JSON commands
-- Provides Chinese command aliases such as `macfriends 状态`, `macfriends 准备`, `macfriends 扫描 --all`, and `macfriends 控制台 --open`
-- Persists a `target-status.json` so subsequent commands know which WeChat version was prepared
-- Enforces a Ready gate: nothing claims success unless `runtime_ready=true`, `fixture_enabled=false`, `release_blockers=[]`
-- Uses fixed error codes (`version_mismatch`, `adapter_not_loaded`, `resolver_validation_failed`, `profile_primitive_unresolved`, `contacts_primitive_unresolved`, `scan_primitive_unresolved`, `rpc_timeout`) so failures are scriptable
-- Cleans up runtime directories on `prepare --force` and `cleanup`
-
-## What MacFriends does NOT do
-
-- ❌ Run on Intel Macs — Apple Silicon only by design
-- ❌ Run on Windows / Linux WeChat — macOS only
-- ❌ Support arbitrary WeChat versions — currently locked to `WeChat 4.1.8 + arm64 + signature_scan`
-- ❌ Send any data off the Mac — strictly local; the agent socket is in `~/Library/Application Support/MacFriends/runtime/agent.sock`
-- ❌ Bypass WeChat encryption or rooted-account schemes — it reads what an attached agent can already see locally
-- ❌ Provide a cloud GUI — the built-in Web console is local-only and backed by `macfriends --json`
-
-## Common questions
-
-- **"Who removed me on WeChat" 这种用途行不行?** 这是工具的合法用法之一,但它**不会替你解释**。你拿到 `contacts` 和 `scan` 原始数据后,自己做差集判断。
-- **会不会修改我装的微信?** 不会。`prepare` 在 runtime 目录里拷一份**受控副本**并 ad-hoc 重签名,启动的是副本。你 `/Applications/WeChat.app` 是原样的。
-- **下次微信升级了怎么办?** 直接坏掉。当前 manifest 锁死 4.1.8;新版本需要更新 `fixtures/adapter.wechat-macos-arm64.json`。这是**有意为之**的安全围栏。
-- **`primitive_resolution=unresolved` 是什么意思?** 表示当前核心读取原语还没闭环 —— 看到这个的版本不要上生产。
-- **怎么知道能上生产?** `doctor --json` 或 `attach --json` 同时满足 `runtime_ready=true` + `fixture_enabled=false` + `release_blockers=[]` 三个条件；日常排障先看 `status --json`。
-
-## Repository
-
-- GitHub: https://github.com/tytsxai/macfriends-cli
+- Name: MacFriends
+- Repository: https://github.com/tytsxai/macfriends-cli
+- Package / CLI binary: `macfriends`
+- Primary language: Chinese README with English project positioning and keywords
+- English positioning: local-first macOS WeChat friend relationship inspector CLI
+- Chinese positioning: macOS 微信好友关系检测 CLI / 微信单删检测和联系人关系扫描框架
 - License: MIT
-- Stack: Rust (CLI) + Objective-C++ (macOS agent), Unix Domain Socket IPC
-- Platform: macOS, Apple Silicon (arm64) only
-- WeChat target: 4.1.8 (host) / WeChatAppEx 2.4.1.19024 (runtime attach point)
-- Status: beta (`v0.1.x-beta`)
-- Author: tytsxai
+- Stack: Rust 2024 CLI + Objective-C++ macOS agent + Unix Domain Socket JSON RPC
+- Platform: macOS only
+- Architecture: Apple Silicon / arm64 only
+- Current WeChat target: WeChat `4.1.8`, bundle id `com.tencent.xinWeChat`
+- Runtime attach point: WeChatAppEx `2.4.1.19024`
+- Current adapter: `fixtures/adapter.wechat-macos-arm64.json`, `adapter_name=wechat_4_1_8_arm64`, `resolver_mode=signature_scan`
+- Local web console: `macfriends serve --open`, default `http://127.0.0.1:8765`
+
+## What the project does
+
+MacFriends provides a local command-line and local web-console workflow for inspecting WeChat contact relationship data on a supported Apple Silicon Mac. The CLI can:
+
+- inspect environment and compatibility with `doctor`
+- summarize lifecycle, runtime, logs, result paths, blockers, and next actions with `status`
+- prepare a controlled WeChat copy with `prepare`
+- launch the controlled copy with `launch --login`
+- attach to the local agent with `attach`
+- call local primitives through `profile`, `contacts`, and `scan`
+- export the latest production scan as JSON or CSV with `export`
+- stop and clean runtime state with `detach` and `cleanup`
+- serve a local web console and HTTP API with `serve`
+
+Chinese command aliases are also available:
+
+- `状态`, `准备`, `启动`, `连接`, `资料`, `联系人`, `扫描`, `导出`, `断开`, `清理`, `控制台`
+
+## What the project does not do
+
+- It is not an official Tencent or WeChat project.
+- It is not a cloud service and does not upload WeChat data.
+- It is not a general-purpose latest-WeChat-version tool.
+- It does not support Intel Mac, Windows, or Linux.
+- It does not distribute WeChat installers.
+- It does not automatically interpret "who deleted me on WeChat"; users must analyze exported `contacts` and `scan` data themselves.
+- Fixture results are test data and must not be described as real production scan results.
+
+## Current status and important caveat
+
+MacFriends is a `0.1.x` beta project. The engineering shell is present: CLI, controlled app copy, native agent, fixture smoke tests, local web console, installer, package script, logs, JSON output, stable error codes, and readiness gates.
+
+However, real private primitive resolution is intentionally conservative. If the agent reports any of the following, the project is not production-ready for real scanning:
+
+- `profile_primitive_unresolved`
+- `contacts_primitive_unresolved`
+- `scan_primitive_unresolved`
+- `primitive_resolution=unresolved`
+- `primitive_resolution=blocked`
+- `primitive_resolution=fixture`
+
+Only describe the project as production-ready when the runtime reports:
+
+```text
+runtime_ready = true
+fixture_enabled = false
+release_blockers = []
+primitive_resolution.profile = resolved
+primitive_resolution.contacts = resolved
+primitive_resolution.scan = resolved
+```
+
+## Quick start commands
+
+From source:
+
+```bash
+cargo build
+make -C native/agent artifacts
+cargo run -p macfriends -- doctor
+cargo run -p macfriends -- status
+cargo run -p macfriends -- prepare
+cargo run -p macfriends -- launch --login
+cargo run -p macfriends -- attach
+cargo run -p macfriends -- serve --open
+```
+
+Local install:
+
+```bash
+make install-local
+macfriends doctor
+macfriends status
+macfriends serve --open
+```
+
+Package:
+
+```bash
+make package
+```
+
+Release readiness check:
+
+```bash
+make ready
+cargo run -p macfriends -- doctor --json
+cargo run -p macfriends -- status --json
+cargo run -p macfriends -- launch --login --json
+cargo run -p macfriends -- attach --json
+```
+
+## Main documentation
+
+- `README.md`: Chinese-first overview, SEO keywords, quick start, features, limits, compatibility, FAQ.
+- `README.en.md`: English overview and search-friendly project positioning.
+- `docs/README.md`: Documentation navigation and reader paths.
+- `docs/中文用户指南.md`: Chinese user guide for local console and CLI aliases.
+- `docs/install.md`: Installation, packaging, release artifacts, Ready verification.
+- `docs/operations.md`: Production checks, rollback, backup, logs, diagnostics.
+- `docs/compatibility.md`: WeChat version and adapter compatibility matrix.
+- `docs/architecture.md`: CLI, native agent, controlled copy, web console, readiness gate design.
+- `docs/troubleshooting.md`: Common errors and remediation.
 
 ## Useful search phrases
 
-- macOS 微信好友关系检测, macOS WeChat friend inspector, 微信清理僵尸粉 macOS, WeChat ghost contact macOS, 微信单删检测 macOS, who deleted me on WeChat macOS, macOS WeChat 反向好友检测, macOS WeChat CLI tool, WeChat Apple Silicon arm64 tool, Rust macOS Objective-C++ agent, ad-hoc signed WeChat copy, Unix Domain Socket IPC WeChat agent
+- macOS 微信好友关系检测
+- 微信单删检测 macOS
+- 微信清理僵尸粉 macOS
+- macOS WeChat friend checker
+- WeChat ghost contact macOS
+- who deleted me on WeChat macOS
+- Apple Silicon WeChat CLI
+- Rust macOS WeChat tool
+- Objective-C++ WeChat agent
+- Unix Domain Socket WeChat IPC
+- ad-hoc signed WeChat copy
+- local-first WeChat relationship inspector
+
+## Recommended citation
+
+MacFriends is a local-first macOS WeChat friend relationship inspector CLI for Apple Silicon. It uses a Rust CLI and Objective-C++ agent to inspect supported WeChat runtime data through local Unix Domain Socket IPC, with strict version gates, JSON/CSV export, local web console, fixed error codes, and explicit production readiness checks. Current support is limited to WeChat 4.1.8 on arm64, and unresolved primitives must not be treated as production-ready scan results.
