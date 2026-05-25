@@ -103,8 +103,8 @@ make package
 输出示例：
 
 ```text
-dist/macfriends-0.1.0-macos-arm64.tar.gz
-dist/macfriends-0.1.0-macos-arm64.tar.gz.sha256
+dist/macfriends-0.1.2-macos-arm64.tar.gz
+dist/macfriends-0.1.2-macos-arm64.tar.gz.sha256
 ```
 
 安装和发布细节见 [docs/install.md](docs/install.md) 与 [docs/operations.md](docs/operations.md)。

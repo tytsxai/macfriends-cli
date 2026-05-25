@@ -29,8 +29,8 @@ make package
 输出物：
 
 ```bash
-dist/macfriends-0.1.0-macos-arm64.tar.gz
-dist/macfriends-0.1.0-macos-arm64.tar.gz.sha256
+dist/macfriends-0.1.2-macos-arm64.tar.gz
+dist/macfriends-0.1.2-macos-arm64.tar.gz.sha256
 ```
 
 打包内容包括：

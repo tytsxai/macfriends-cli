@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+暂无。
+
+## 0.1.2 - 2026-05-25
+
 ### Added
 - `macfriends status` as a product-level overview for lifecycle, run state, latest scan snapshots, paths, blockers, and next actions.
 - `macfriends serve` local Web console with HTTP APIs for status, prepare, launch, scan, export, detach, cleanup, and logs.
