@@ -20,7 +20,7 @@ macfriends 控制台 --open
 macfriends serve --addr 127.0.0.1:8787 --open
 ```
 
-控制台只面向本机使用。不要把监听地址改成公网地址；当前接口会执行本地 `prepare`、`launch`、`scan`、`export` 等操作。
+控制台只面向本机使用，`serve` 只允许监听 loopback 地址，例如 `127.0.0.1` 或 `[::1]`。如果传入 `0.0.0.0`、局域网 IP 或公网地址，进程会在绑定端口前直接失败；当前接口会执行本地 `prepare`、`launch`、`scan`、`export` 等操作，不能暴露给其他机器。
 
 `serve` 每次启动都会生成一个内存态会话 token，内置页面会自动在写操作中带上 `X-MacFriends-Token`。没有 token 的 `POST` 请求会被拒绝，服务端也不会对外开放通配 CORS。这个设计用于阻断浏览器里其他网页跨站触发本机操作。
 
@@ -88,6 +88,8 @@ macfriends serve --addr 127.0.0.1:8787 --open
 | `POST` | `/api/cleanup` | `{}` | 清理本地运行态文件 |
 
 写操作必须携带当前页面会话的 `X-MacFriends-Token`。Web 导出接口不接受自定义 `output` 路径，始终使用 CLI 默认结果目录，避免本地网页请求把扫描结果写到任意位置。
+
+如果 HTTP body 不完整、`Content-Length` 非法，或 JSON body 格式错误，服务端会在执行 CLI 子命令前返回 `400` 和 `error_code=web_bad_request`。这类错误属于调用方请求格式问题，不会触发 `prepare`、`scan` 等本地操作。
 
 ## 生产边界
 

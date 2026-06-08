@@ -116,7 +116,7 @@ MacFriends 不是云服务，也没有服务端账号、队列或远程扫描架
 macfriends serve --addr 0.0.0.0:8765
 ```
 
-`serve` 会执行本机 `prepare`、`launch`、`scan`、`export` 等操作，只应监听 `127.0.0.1`。Web 写操作有会话 token，但这不是公网认证系统。
+`serve` 会执行本机 `prepare`、`launch`、`scan`、`export` 等操作，代码层面只允许监听 loopback 地址。传入 `0.0.0.0`、局域网 IP 或公网地址会直接失败。Web 写操作有会话 token，但这不是公网认证系统。
 
 ## 生产 Ready 验收
 

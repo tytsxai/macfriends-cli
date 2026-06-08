@@ -12,6 +12,16 @@ The local web console SHALL require a per-server token for mutating HTTP APIs.
 - **THEN** the server returns an error response
 - **AND** the CLI command is not executed
 
+### Requirement: Web console binds only to loopback
+
+The local web console SHALL reject non-loopback listen addresses.
+
+#### Scenario: Public bind address is rejected
+
+- **WHEN** `macfriends serve` is started with `--addr 0.0.0.0:8765`
+- **THEN** the server exits before binding the listener
+- **AND** the error explains that only loopback addresses such as `127.0.0.1` or `[::1]` are allowed
+
 ### Requirement: Web exports stay in the result directory
 
 The web console SHALL NOT accept caller-controlled export output paths.
@@ -21,6 +31,22 @@ The web console SHALL NOT accept caller-controlled export output paths.
 - **WHEN** the dashboard calls `POST /api/export`
 - **THEN** the export command runs without a user-provided `--output`
 - **AND** the CLI writes the file to the default MacFriends result directory
+
+### Requirement: Invalid web requests fail before command execution
+
+The local web console SHALL reject malformed HTTP requests and malformed JSON bodies as client errors before invoking CLI commands.
+
+#### Scenario: Malformed JSON body is rejected
+
+- **WHEN** a request calls `POST /api/scan` with the current `X-MacFriends-Token` but an invalid JSON body
+- **THEN** the server returns `400`
+- **AND** the response uses `error_code=web_bad_request`
+- **AND** the scan command is not executed
+
+#### Scenario: Truncated HTTP body is rejected
+
+- **WHEN** a request declares a `Content-Length` larger than the bytes actually sent
+- **THEN** the server returns or records a bad request error instead of executing the API with a partial or empty body
 
 ### Requirement: Runtime PID checks verify process identity
 

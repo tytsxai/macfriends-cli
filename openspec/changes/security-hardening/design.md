@@ -4,6 +4,10 @@
 
 `macfriends serve` generates an in-memory token at startup and injects it into the served dashboard. Mutating `/api/*` requests must send the token with `X-MacFriends-Token`. This blocks cross-site POSTs while keeping the single-user local console friction low.
 
+## Loopback Binding
+
+`macfriends serve` rejects non-loopback listen addresses before binding the TCP listener. The dashboard exposes profile, contacts, logs, and local command execution APIs, so binding to `0.0.0.0`, LAN, or public interfaces is outside the product security boundary even when write APIs require a token.
+
 ## Export Path
 
 The dashboard export action does not accept an arbitrary output path. It uses the CLI default result path so scan data remains under the configured MacFriends result directory.

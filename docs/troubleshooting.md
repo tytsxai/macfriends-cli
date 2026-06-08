@@ -90,6 +90,7 @@ macfriends prepare --force
 | `agent_socket_conflict` | socket 已被 live agent 占用 | `macfriends detach` 或退出受控 WeChat |
 | `agent_process_conflict` | run-state 中进程仍运行 | 退出受控 WeChat 后再操作 |
 | `agent_unreachable` | socket 不存在或不可连接 | `launch --login` 后重试，检查 `/tmp/macfriends-$USER` |
+| `web_bad_request` | Web API 请求体不完整或 JSON 格式错误 | 修正调用方请求；内置控制台正常不会触发 |
 | `request_too_large` | RPC 或 Web 请求超过限制 | 缩小请求体，检查调用方 |
 | `production_scan_missing` | 没有正式链路扫描 | 先让 Ready 通过，再 `scan --all` |
 | `fixture_export_forbidden` | 尝试导出 fixture 结果 | 改用正式链路生成 production scan |
