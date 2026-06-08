@@ -112,6 +112,17 @@ assert_json "$WORK_DIR/status.json" 'len(data["next_actions"]) >= 1'
 run_cli status_zh 状态
 assert_json "$WORK_DIR/status_zh.json" 'data["fixture_enabled"] is True'
 
+if "$MACFRIENDS_BIN" serve --addr 0.0.0.0:0 > "$WORK_DIR/web-public-bind.log" 2>&1; then
+  echo "Web console unexpectedly accepted a non-loopback bind address" >&2
+  cat "$WORK_DIR/web-public-bind.log" >&2
+  exit 1
+fi
+if ! /usr/bin/grep -q "只能监听 loopback 地址" "$WORK_DIR/web-public-bind.log"; then
+  echo "Web non-loopback bind failure did not explain the loopback-only policy" >&2
+  cat "$WORK_DIR/web-public-bind.log" >&2
+  exit 1
+fi
+
 "$MACFRIENDS_BIN" serve --addr 127.0.0.1:0 > "$WORK_DIR/web.log" 2>&1 &
 WEB_PID=$!
 for _ in $(seq 1 40); do
@@ -171,6 +182,13 @@ if [ "$WEB_SCAN_NO_TOKEN_STATUS" != "403" ]; then
   exit 1
 fi
 assert_json "$WORK_DIR/web-scan-no-token.json" 'data["error_code"] == "web_csrf_required"'
+WEB_SCAN_BAD_JSON_STATUS="$(/usr/bin/curl -sS -o "$WORK_DIR/web-scan-bad-json.json" -w '%{http_code}' -X POST -H 'content-type: application/json' -H "x-macfriends-token: $WEB_TOKEN" -d '{"all":' "$WEB_URL/api/scan")"
+if [ "$WEB_SCAN_BAD_JSON_STATUS" != "400" ]; then
+  echo "Web scan with invalid JSON returned unexpected HTTP $WEB_SCAN_BAD_JSON_STATUS" >&2
+  cat "$WORK_DIR/web-scan-bad-json.json" >&2
+  exit 1
+fi
+assert_json "$WORK_DIR/web-scan-bad-json.json" 'data["error_code"] == "web_bad_request"'
 /usr/bin/curl -fsS -X POST -H 'content-type: application/json' -H "x-macfriends-token: $WEB_TOKEN" -d '{"all":true}' "$WEB_URL/api/scan" > "$WORK_DIR/web-scan.json"
 assert_json "$WORK_DIR/web-scan.json" 'data["ok"] is True'
 assert_json "$WORK_DIR/web-scan.json" 'data["data"]["mode"] == "fixture"'

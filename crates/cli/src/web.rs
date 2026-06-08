@@ -4,14 +4,69 @@ use anyhow::{Context, Result, anyhow};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::process::{Command as ProcessCommand, Stdio};
 use std::time::Duration;
 
 const MAX_BODY_BYTES: usize = 64 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WebErrorCode {
+    BadRequest,
+    Internal,
+}
+
+#[derive(Debug)]
+struct WebError {
+    code: WebErrorCode,
+    message: String,
+}
+
+impl WebError {
+    fn bad_request(message: impl Into<String>) -> Self {
+        Self {
+            code: WebErrorCode::BadRequest,
+            message: message.into(),
+        }
+    }
+
+    fn internal(error: anyhow::Error) -> Self {
+        Self {
+            code: WebErrorCode::Internal,
+            message: error.to_string(),
+        }
+    }
+}
+
+impl std::fmt::Display for WebError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for WebError {}
+
+impl From<anyhow::Error> for WebError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::internal(error)
+    }
+}
+
+impl From<std::io::Error> for WebError {
+    fn from(error: std::io::Error) -> Self {
+        Self::internal(error.into())
+    }
+}
+
+impl From<serde_json::Error> for WebError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::internal(error.into())
+    }
+}
+
 pub fn serve(args: ServeArgs) -> Result<()> {
+    ensure_loopback_addr(args.addr)?;
     let listener = TcpListener::bind(args.addr)
         .with_context(|| format!("无法监听本地控制台地址: {}", args.addr))?;
     let state = WebState::new()?;
@@ -26,18 +81,32 @@ pub fn serve(args: ServeArgs) -> Result<()> {
         match stream {
             Ok(mut stream) => {
                 if let Err(error) = handle_stream(&mut stream, &state) {
+                    let (status, error_code) = match error.code {
+                        WebErrorCode::BadRequest => (400, "web_bad_request"),
+                        WebErrorCode::Internal => (500, "web_request_failed"),
+                    };
                     let payload = json!({
                         "ok": false,
-                        "error_code": "web_request_failed",
+                        "error_code": error_code,
                         "message": error.to_string(),
                     });
-                    let _ = write_json_response(&mut stream, 500, &payload);
+                    let _ = write_json_response(&mut stream, status, &payload);
                 }
             }
             Err(error) => eprintln!("Web accept error: {error}"),
         }
     }
     Ok(())
+}
+
+fn ensure_loopback_addr(addr: SocketAddr) -> Result<()> {
+    if addr.ip().is_loopback() {
+        return Ok(());
+    }
+
+    Err(anyhow!(
+        "本地控制台只能监听 loopback 地址，当前地址为 {addr}；请改用 127.0.0.1 或 [::1]"
+    ))
 }
 
 #[derive(Debug)]
@@ -63,12 +132,13 @@ fn generate_token() -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-fn handle_stream(stream: &mut TcpStream, state: &WebState) -> Result<()> {
+fn handle_stream(stream: &mut TcpStream, state: &WebState) -> std::result::Result<(), WebError> {
     stream.set_read_timeout(Some(REQUEST_TIMEOUT))?;
     stream.set_write_timeout(Some(REQUEST_TIMEOUT))?;
     let request = read_request(stream)?;
     let response = route_request(&request, state)?;
-    write_response(stream, response)
+    write_response(stream, response)?;
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -87,26 +157,29 @@ struct HttpResponse {
     body: Vec<u8>,
 }
 
-fn read_request(stream: &mut TcpStream) -> Result<HttpRequest> {
+fn read_request(stream: &mut TcpStream) -> std::result::Result<HttpRequest, WebError> {
     let mut buffer = Vec::new();
     let mut chunk = [0u8; 4096];
     let header_end = loop {
         let read = stream.read(&mut chunk)?;
         if read == 0 {
-            return Err(anyhow!("HTTP 请求为空"));
+            return Err(WebError::bad_request("HTTP 请求为空"));
         }
         buffer.extend_from_slice(&chunk[..read]);
         if buffer.len() > MAX_BODY_BYTES {
-            return Err(anyhow!("HTTP 请求过大"));
+            return Err(WebError::bad_request("HTTP 请求过大"));
         }
         if let Some(position) = find_header_end(&buffer) {
             break position;
         }
     };
 
-    let header_text = std::str::from_utf8(&buffer[..header_end]).context("HTTP 头不是 UTF-8")?;
+    let header_text = std::str::from_utf8(&buffer[..header_end])
+        .map_err(|_| WebError::bad_request("HTTP 头不是 UTF-8"))?;
     let mut lines = header_text.lines();
-    let request_line = lines.next().context("缺少 HTTP request line")?;
+    let request_line = lines
+        .next()
+        .ok_or_else(|| WebError::bad_request("缺少 HTTP request line"))?;
     let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or_default().to_string();
     let target = parts.next().unwrap_or("/").to_string();
@@ -116,10 +189,15 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest> {
         .collect::<BTreeMap<_, _>>();
     let content_length = headers
         .get("content-length")
-        .and_then(|value| value.parse::<usize>().ok())
+        .map(|value| {
+            value
+                .parse::<usize>()
+                .map_err(|_| WebError::bad_request("Content-Length 非法"))
+        })
+        .transpose()?
         .unwrap_or(0);
     if content_length > MAX_BODY_BYTES {
-        return Err(anyhow!("HTTP body 过大"));
+        return Err(WebError::bad_request("HTTP body 过大"));
     }
 
     let body_start = header_end + 4;
@@ -129,6 +207,9 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest> {
             break;
         }
         buffer.extend_from_slice(&chunk[..read]);
+    }
+    if buffer.len() < body_start + content_length {
+        return Err(WebError::bad_request("HTTP body 不完整"));
     }
     let body = buffer
         .get(body_start..body_start + content_length)
@@ -180,7 +261,10 @@ fn percent_decode(value: &str) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
-fn route_request(request: &HttpRequest, state: &WebState) -> Result<HttpResponse> {
+fn route_request(
+    request: &HttpRequest,
+    state: &WebState,
+) -> std::result::Result<HttpResponse, WebError> {
     if request.method == "OPTIONS" {
         return Ok(web_csrf_error());
     }
@@ -235,7 +319,7 @@ fn web_csrf_error() -> HttpResponse {
     )
 }
 
-fn prepare_response(request: &HttpRequest) -> Result<HttpResponse> {
+fn prepare_response(request: &HttpRequest) -> std::result::Result<HttpResponse, WebError> {
     let body = json_body(request)?;
     let mut args = vec!["prepare".to_string()];
     if body.get("force").and_then(Value::as_bool).unwrap_or(false) {
@@ -250,7 +334,7 @@ fn prepare_response(request: &HttpRequest) -> Result<HttpResponse> {
     command_response_owned(args)
 }
 
-fn launch_response(request: &HttpRequest) -> Result<HttpResponse> {
+fn launch_response(request: &HttpRequest) -> std::result::Result<HttpResponse, WebError> {
     let body = json_body(request)?;
     let mut args = vec!["launch".to_string()];
     if body.get("login").and_then(Value::as_bool).unwrap_or(true) {
@@ -259,7 +343,7 @@ fn launch_response(request: &HttpRequest) -> Result<HttpResponse> {
     command_response_owned(args)
 }
 
-fn scan_response(request: &HttpRequest) -> Result<HttpResponse> {
+fn scan_response(request: &HttpRequest) -> std::result::Result<HttpResponse, WebError> {
     let body = json_body(request)?;
     let mut args = vec!["scan".to_string()];
     if body.get("all").and_then(Value::as_bool).unwrap_or(true) {
@@ -268,7 +352,7 @@ fn scan_response(request: &HttpRequest) -> Result<HttpResponse> {
     command_response_owned(args)
 }
 
-fn export_response(request: &HttpRequest) -> Result<HttpResponse> {
+fn export_response(request: &HttpRequest) -> std::result::Result<HttpResponse, WebError> {
     let body = json_body(request)?;
     let format = body.get("format").and_then(Value::as_str).unwrap_or("csv");
     if !matches!(format, "json" | "csv") {
@@ -285,7 +369,7 @@ fn export_response(request: &HttpRequest) -> Result<HttpResponse> {
     command_response_owned(args)
 }
 
-fn logs_response(request: &HttpRequest) -> Result<HttpResponse> {
+fn logs_response(request: &HttpRequest) -> std::result::Result<HttpResponse, WebError> {
     let layout = AppLayout::detect()?;
     let kind = request
         .query
@@ -334,18 +418,19 @@ fn logs_response(request: &HttpRequest) -> Result<HttpResponse> {
     ))
 }
 
-fn json_body(request: &HttpRequest) -> Result<Value> {
+fn json_body(request: &HttpRequest) -> std::result::Result<Value, WebError> {
     if request.body.is_empty() {
         return Ok(json!({}));
     }
-    Ok(serde_json::from_slice(&request.body)?)
+    serde_json::from_slice(&request.body)
+        .map_err(|error| WebError::bad_request(format!("JSON body 非法: {error}")))
 }
 
-fn command_response(args: &[&str]) -> Result<HttpResponse> {
+fn command_response(args: &[&str]) -> std::result::Result<HttpResponse, WebError> {
     command_response_owned(args.iter().map(|item| item.to_string()).collect())
 }
 
-fn command_response_owned(args: Vec<String>) -> Result<HttpResponse> {
+fn command_response_owned(args: Vec<String>) -> std::result::Result<HttpResponse, WebError> {
     let result = run_cli_json(&args)?;
     let status = if result.ok { 200 } else { 409 };
     Ok(json_response(status, serde_json::to_value(result)?))
@@ -718,3 +803,67 @@ const DASHBOARD_HTML: &str = r#"<!doctype html>
 </body>
 </html>
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::Shutdown;
+    use std::net::{Ipv4Addr, Ipv6Addr};
+    use std::thread;
+
+    #[test]
+    fn loopback_web_bind_addresses_are_allowed() {
+        assert!(ensure_loopback_addr(SocketAddr::from((Ipv4Addr::LOCALHOST, 8765))).is_ok());
+        assert!(ensure_loopback_addr(SocketAddr::from((Ipv6Addr::LOCALHOST, 8765))).is_ok());
+    }
+
+    #[test]
+    fn non_loopback_web_bind_addresses_are_rejected() {
+        let error = ensure_loopback_addr(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 8765)))
+            .expect_err("0.0.0.0 must not be accepted for the local console");
+
+        assert!(error.to_string().contains("只能监听 loopback 地址"));
+    }
+
+    #[test]
+    fn invalid_json_body_is_a_bad_request() {
+        let request = HttpRequest {
+            method: "POST".into(),
+            path: "/api/scan".into(),
+            query: BTreeMap::new(),
+            headers: BTreeMap::from([("x-macfriends-token".into(), "token".into())]),
+            body: b"{not-json".to_vec(),
+        };
+
+        let error = route_request(
+            &request,
+            &WebState {
+                csrf_token: "token".into(),
+            },
+        )
+        .expect_err("invalid JSON must not be treated as an internal web failure");
+
+        assert_eq!(error.code, WebErrorCode::BadRequest);
+        assert!(error.to_string().contains("JSON body 非法"));
+    }
+
+    #[test]
+    fn incomplete_http_body_is_rejected() {
+        let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0))).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            read_request(&mut stream).expect_err("truncated body must be rejected")
+        });
+
+        let mut client = TcpStream::connect(addr).unwrap();
+        client
+            .write_all(b"POST /api/scan HTTP/1.1\r\nContent-Length: 10\r\n\r\n{}")
+            .unwrap();
+        client.shutdown(Shutdown::Write).unwrap();
+
+        let error = handle.join().unwrap();
+        assert_eq!(error.code, WebErrorCode::BadRequest);
+        assert!(error.to_string().contains("HTTP body 不完整"));
+    }
+}
