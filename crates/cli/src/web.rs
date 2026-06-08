@@ -14,6 +14,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 pub fn serve(args: ServeArgs) -> Result<()> {
     let listener = TcpListener::bind(args.addr)
         .with_context(|| format!("无法监听本地控制台地址: {}", args.addr))?;
+    let state = WebState::new()?;
     let url = format!("http://{}", listener.local_addr()?);
     if args.open {
         let _ = ProcessCommand::new("/usr/bin/open").arg(&url).status();
@@ -24,7 +25,7 @@ pub fn serve(args: ServeArgs) -> Result<()> {
     for stream in listener.incoming() {
         match stream {
             Ok(mut stream) => {
-                if let Err(error) = handle_stream(&mut stream) {
+                if let Err(error) = handle_stream(&mut stream, &state) {
                     let payload = json!({
                         "ok": false,
                         "error_code": "web_request_failed",
@@ -39,11 +40,34 @@ pub fn serve(args: ServeArgs) -> Result<()> {
     Ok(())
 }
 
-fn handle_stream(stream: &mut TcpStream) -> Result<()> {
+#[derive(Debug)]
+struct WebState {
+    csrf_token: String,
+}
+
+impl WebState {
+    fn new() -> Result<Self> {
+        Ok(Self {
+            csrf_token: generate_token()?,
+        })
+    }
+}
+
+fn generate_token() -> Result<String> {
+    let output = ProcessCommand::new("/usr/bin/uuidgen")
+        .output()
+        .context("生成本地控制台 token 失败")?;
+    if !output.status.success() {
+        return Err(anyhow!("生成本地控制台 token 失败"));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn handle_stream(stream: &mut TcpStream, state: &WebState) -> Result<()> {
     stream.set_read_timeout(Some(REQUEST_TIMEOUT))?;
     stream.set_write_timeout(Some(REQUEST_TIMEOUT))?;
     let request = read_request(stream)?;
-    let response = route_request(&request)?;
+    let response = route_request(&request, state)?;
     write_response(stream, response)
 }
 
@@ -52,6 +76,7 @@ struct HttpRequest {
     method: String,
     path: String,
     query: BTreeMap<String, String>,
+    headers: BTreeMap<String, String>,
     body: Vec<u8>,
 }
 
@@ -85,10 +110,13 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest> {
     let mut parts = request_line.split_whitespace();
     let method = parts.next().unwrap_or_default().to_string();
     let target = parts.next().unwrap_or("/").to_string();
-    let content_length = lines
+    let headers = lines
         .filter_map(|line| line.split_once(':'))
-        .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
-        .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+        .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_string()))
+        .collect::<BTreeMap<_, _>>();
+    let content_length = headers
+        .get("content-length")
+        .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(0);
     if content_length > MAX_BODY_BYTES {
         return Err(anyhow!("HTTP body 过大"));
@@ -111,6 +139,7 @@ fn read_request(stream: &mut TcpStream) -> Result<HttpRequest> {
         method,
         path,
         query,
+        headers,
         body,
     })
 }
@@ -151,16 +180,15 @@ fn percent_decode(value: &str) -> Option<String> {
     String::from_utf8(bytes).ok()
 }
 
-fn route_request(request: &HttpRequest) -> Result<HttpResponse> {
+fn route_request(request: &HttpRequest, state: &WebState) -> Result<HttpResponse> {
     if request.method == "OPTIONS" {
-        return Ok(HttpResponse {
-            status: 204,
-            content_type: "text/plain; charset=utf-8",
-            body: Vec::new(),
-        });
+        return Ok(web_csrf_error());
+    }
+    if request.method == "POST" && !has_valid_csrf_token(request, state) {
+        return Ok(web_csrf_error());
     }
     match (request.method.as_str(), request.path.as_str()) {
-        ("GET", "/") => Ok(html_response(DASHBOARD_HTML)),
+        ("GET", "/") => Ok(html_response(&dashboard_html(&state.csrf_token))),
         ("GET", "/api/health") => Ok(json_response(
             200,
             json!({ "ok": true, "service": "macfriends-web" }),
@@ -187,6 +215,24 @@ fn route_request(request: &HttpRequest) -> Result<HttpResponse> {
             }),
         )),
     }
+}
+
+fn has_valid_csrf_token(request: &HttpRequest, state: &WebState) -> bool {
+    request
+        .headers
+        .get("x-macfriends-token")
+        .is_some_and(|value| value == &state.csrf_token)
+}
+
+fn web_csrf_error() -> HttpResponse {
+    json_response(
+        403,
+        json!({
+            "ok": false,
+            "error_code": "web_csrf_required",
+            "message": "本地控制台写操作需要会话 token",
+        }),
+    )
 }
 
 fn prepare_response(request: &HttpRequest) -> Result<HttpResponse> {
@@ -235,13 +281,7 @@ fn export_response(request: &HttpRequest) -> Result<HttpResponse> {
             }),
         ));
     }
-    let mut args = vec!["export".to_string(), "--format".into(), format.into()];
-    if let Some(output) = body.get("output").and_then(Value::as_str)
-        && !output.trim().is_empty()
-    {
-        args.push("--output".into());
-        args.push(output.to_string());
-    }
+    let args = vec!["export".to_string(), "--format".into(), format.into()];
     command_response_owned(args)
 }
 
@@ -361,13 +401,14 @@ fn write_response(stream: &mut TcpStream, response: HttpResponse) -> Result<()> 
         200 => "OK",
         204 => "No Content",
         400 => "Bad Request",
+        403 => "Forbidden",
         404 => "Not Found",
         409 => "Conflict",
         500 => "Internal Server Error",
         _ => "OK",
     };
     let headers = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: content-type\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Frame-Options: DENY\r\nConnection: close\r\n\r\n",
         response.status,
         status_text,
         response.content_type,
@@ -386,12 +427,16 @@ fn json_response(status: u16, value: Value) -> HttpResponse {
     }
 }
 
-fn html_response(html: &'static str) -> HttpResponse {
+fn html_response(html: &str) -> HttpResponse {
     HttpResponse {
         status: 200,
         content_type: "text/html; charset=utf-8",
         body: html.as_bytes().to_vec(),
     }
+}
+
+fn dashboard_html(csrf_token: &str) -> String {
+    DASHBOARD_HTML.replace("__MACFRIENDS_TOKEN__", csrf_token)
 }
 
 const DASHBOARD_HTML: &str = r#"<!doctype html>
@@ -578,12 +623,13 @@ const DASHBOARD_HTML: &str = r#"<!doctype html>
     const $ = (id) => document.getElementById(id);
     const output = $("output");
     const buttons = [...document.querySelectorAll("button")];
+    const csrfToken = "__MACFRIENDS_TOKEN__";
     let lastResult = null;
 
     function setBusy(flag) { buttons.forEach((btn) => btn.disabled = flag); }
     function write(value) { output.textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2); }
     const lifecycleText = {
-      ready: "可正式使用",
+      ready: "真实运行态已就绪",
       running_blocked: "已启动但未满足生产条件",
       process_without_agent: "进程存在但 agent 未连接",
       prepared: "已准备，等待启动",
@@ -611,7 +657,11 @@ const DASHBOARD_HTML: &str = r#"<!doctype html>
       try {
         const response = await fetch(path, {
           ...options,
-          headers: { "content-type": "application/json", ...(options.headers || {}) }
+          headers: {
+            "content-type": "application/json",
+            "x-macfriends-token": csrfToken,
+            ...(options.headers || {})
+          }
         });
         const data = await response.json();
         lastResult = data;

@@ -162,6 +162,10 @@ fn doctor(json_output: bool) -> Result<()> {
         notes: vec![
             format!("当前唯一受支持的微信版本是 {}。", adapter.build_target),
             "真实适配必须满足 bundle/version/arch 三项门禁。".into(),
+            format!(
+                "当前 adapter 发布通道为 {}，真实原语未 resolved 时只能作为 beta/testable 资产。",
+                adapter.release_channel.as_deref().unwrap_or("unknown")
+            ),
             "fixture 模式仅用于测试，不属于默认用户路径。".into(),
         ],
     };
@@ -183,7 +187,7 @@ fn doctor(json_output: bool) -> Result<()> {
         let blockers = format_release_blockers(&report.release_blockers);
         let primitive = format_primitive_resolution(report.primitive_resolution.as_ref());
         format!(
-            "MacFriends 检查\n- 系统: {}\n- 架构: {}\n- 已安装微信: {}\n- 受控微信: {}\n- 目标版本: {}\n- 目标是否支持: {}\n- 运行态 Ready: {}\n- Fixture 测试模式: {}\n- Adapter: {}\n- 原因: {}\n- 原语解析: {}\n- Socket: {}{}",
+            "MacFriends 检查\n- 系统: {}\n- 架构: {}\n- 已安装微信: {}\n- 受控微信: {}\n- 目标版本: {}\n- 目标是否支持: {}\n- 真实运行态 Ready: {}\n- Fixture 测试模式: {}\n- Adapter: {}\n- 原因: {}\n- 原语解析: {}\n- Socket: {}{}",
             report.os,
             report.arch,
             report
@@ -233,7 +237,7 @@ fn status(json_output: bool) -> Result<()> {
     let last_production_scan = match scan_snapshot_if_exists(&layout.latest_scan) {
         Ok(snapshot) => snapshot,
         Err(error) => {
-            release_blockers.push(format!("无法读取最近生产扫描结果：{error}"));
+            release_blockers.push(format!("无法读取最近正式链路扫描结果：{error}"));
             None
         }
     };
@@ -414,7 +418,7 @@ fn launch(json_output: bool, args: LaunchArgs) -> Result<()> {
 
     cleanup_stale_runtime_state(&layout)?;
     if let Some(run_state) = read_run_state_if_exists(&layout)?
-        && util::pid_is_running(run_state.pid)
+        && run_state_pid_matches(&run_state, run_state.pid)
     {
         return Err(anyhow!(
             "已有受控进程正在运行，PID={}；请先 detach 或关闭该进程",
@@ -439,7 +443,8 @@ fn launch(json_output: bool, args: LaunchArgs) -> Result<()> {
     }
 
     let executable = util::app_executable(&layout.managed_app)?;
-    let mut command = ProcessCommand::new(executable);
+    let executable_path = executable.display().to_string();
+    let mut command = ProcessCommand::new(&executable);
     for key in [
         "MACFRIENDS_ENABLE_FIXTURE",
         "MACFRIENDS_ADAPTER_TEMPLATE",
@@ -470,6 +475,7 @@ fn launch(json_output: bool, args: LaunchArgs) -> Result<()> {
     let run_state = RunState {
         pid: child.id(),
         runtime_pid: None,
+        executable_path: Some(executable_path),
         started_at: Utc::now(),
         socket_path: layout.socket_path.display().to_string(),
         adapter_name: target_status.adapter_name.clone(),
@@ -500,7 +506,7 @@ fn launch(json_output: bool, args: LaunchArgs) -> Result<()> {
     let release_blockers = collect_release_blockers(&target_status, Some(&status));
     let message = if release_blockers.is_empty() {
         format!(
-            "已启动受控目标进程，PID={}{}，运行态 Ready",
+            "已启动受控目标进程，PID={}{}，真实运行态 Ready",
             child.id(),
             format_runtime_pid(runtime_pid)
         )
@@ -695,10 +701,10 @@ fn scan(json_output: bool, args: ScanArgs) -> Result<()> {
 fn export_results(json_output: bool, args: ExportArgs) -> Result<()> {
     let layout = AppLayout::detect()?;
     let content = std::fs::read(&layout.latest_scan)
-        .with_context(|| format!("未找到生产扫描结果: {}", layout.latest_scan.display()))?;
+        .with_context(|| format!("未找到正式链路扫描结果: {}", layout.latest_scan.display()))?;
     let report: ScanReport = serde_json::from_slice(&content)?;
     if report.mode != "production" {
-        return Err(anyhow!("最近一次扫描结果不是生产结果，拒绝导出"));
+        return Err(anyhow!("最近一次扫描结果不是正式链路结果，拒绝导出"));
     }
     let output = args.output.unwrap_or_else(|| match args.format {
         ExportFormat::Json => layout.result_dir.join("latest-scan-export.json"),
@@ -917,12 +923,12 @@ fn human_status_report(report: &StatusReport) -> String {
         .as_ref()
         .map(|scan| {
             format!(
-                "\n- 最近生产扫描: {} 条记录，时间 {}",
+                "\n- 最近正式链路扫描: {} 条记录，时间 {}",
                 scan.records,
                 scan.scanned_at.to_rfc3339()
             )
         })
-        .unwrap_or_else(|| "\n- 最近生产扫描: 无".into());
+        .unwrap_or_else(|| "\n- 最近正式链路扫描: 无".into());
     let blockers = format_release_blockers(&report.release_blockers);
     let compatibility = if report.compatibility_warnings.is_empty() {
         String::new()
@@ -944,7 +950,7 @@ fn human_status_report(report: &StatusReport) -> String {
     };
 
     format!(
-        "MacFriends 状态\n- 当前阶段: {} ({})\n- 支持的微信版本: {}\n- 已安装微信版本: {}\n- 受控微信版本: {}\n- 目标版本支持: {}\n- 运行态 Ready: {}\n- Fixture 测试模式: {}{}{}\n- 结果目录: {}\n- CLI 日志: {}\n- Agent 日志: {}{}{}{}",
+        "MacFriends 状态\n- 当前阶段: {} ({})\n- 支持的微信版本: {}\n- 已安装微信版本: {}\n- 受控微信版本: {}\n- 目标版本支持: {}\n- 真实运行态 Ready: {}\n- Fixture 测试模式: {}{}{}\n- 结果目录: {}\n- CLI 日志: {}\n- Agent 日志: {}{}{}{}",
         report.lifecycle_label,
         report.lifecycle,
         report.supported_wechat_version,
@@ -972,7 +978,7 @@ fn human_status_report(report: &StatusReport) -> String {
 
 fn lifecycle_label_zh(lifecycle: &str) -> &'static str {
     match lifecycle {
-        "ready" => "可正式使用",
+        "ready" => "真实运行态已就绪",
         "running_blocked" => "已启动但未满足生产条件",
         "process_without_agent" => "进程存在但 agent 未连接",
         "prepared" => "已准备，等待启动",
@@ -1032,14 +1038,14 @@ fn next_actions(
     }
     if !status.runtime_ready || !release_blockers.is_empty() {
         actions.push(
-            "查看 agent 日志和阻塞项，先让 runtime_ready=true 且 release_blockers=[]。".into(),
+            "查看 agent 日志和阻塞项，先让 runtime_ready=true、release_blockers=[] 且原语均为 resolved。".into(),
         );
     }
     if status.runtime_ready && !status.fixture_enabled && release_blockers.is_empty() {
-        actions.push("运行 macfriends 扫描 --all 生成生产扫描结果。".into());
+        actions.push("运行 macfriends 扫描 --all 生成正式链路扫描结果。".into());
         if last_production_scan.is_some() {
             actions.push(
-                "运行 macfriends 导出 --format csv 或 --format json 导出最近生产结果。".into(),
+                "运行 macfriends 导出 --format csv 或 --format json 导出最近正式链路结果。".into(),
             );
         }
     }
@@ -1088,8 +1094,10 @@ fn run_state_summary(run_state: &RunState) -> RunStateSummary {
     RunStateSummary {
         pid: run_state.pid,
         runtime_pid: run_state.runtime_pid,
-        pid_running: util::pid_is_running(run_state.pid),
-        runtime_pid_running: run_state.runtime_pid.is_some_and(util::pid_is_running),
+        pid_running: run_state_pid_matches(run_state, run_state.pid),
+        runtime_pid_running: run_state
+            .runtime_pid
+            .is_some_and(|pid| run_state_pid_matches(run_state, pid)),
         started_at: run_state.started_at,
         socket_path: run_state.socket_path.clone(),
         agent_attached: run_state.agent_attached,
@@ -1138,10 +1146,10 @@ fn collect_release_blockers(
         None => blockers.push("agent 未运行，无法验证真实运行态。".into()),
         Some(status) => {
             if status.fixture_enabled {
-                blockers.push("当前运行在 fixture 模式，结果不能视为生产结果。".into());
+                blockers.push("当前运行在 fixture 模式，结果不能视为真实微信结果。".into());
             }
             if !status.runtime_ready {
-                blockers.push("agent 运行态未 Ready。".into());
+                blockers.push("agent 真实运行态未 Ready。".into());
             }
             if let Some(reason) = &status.reason
                 && !reason.is_empty()
@@ -1158,7 +1166,7 @@ fn collect_release_blockers(
 
 fn primitive_blockers(resolution: Option<&PrimitiveResolution>) -> Vec<String> {
     let Some(resolution) = resolution else {
-        return vec!["缺少原语解析状态，无法判定是否可上线。".into()];
+        return vec!["缺少原语解析状态，无法判定是否真实可用。".into()];
     };
     let mut blockers = Vec::new();
     for (name, state) in [
@@ -1439,7 +1447,63 @@ fn process_has_socket_open(pid: u32, socket_path: &Path) -> bool {
 fn run_state_has_live_process(run_state: &RunState) -> bool {
     run_state_pids(run_state)
         .into_iter()
-        .any(util::pid_is_running)
+        .any(|pid| run_state_pid_matches(run_state, pid))
+}
+
+fn run_state_pid_matches(run_state: &RunState, pid: u32) -> bool {
+    if !util::pid_is_running(pid) {
+        return false;
+    }
+
+    if process_has_socket_open(pid, Path::new(&run_state.socket_path)) {
+        return true;
+    }
+
+    process_command_line(pid)
+        .map(|command| run_state_command_matches(run_state, pid, &command))
+        .unwrap_or(false)
+}
+
+fn run_state_command_matches(run_state: &RunState, pid: u32, command: &str) -> bool {
+    let Some(executable_path) = run_state.executable_path.as_deref() else {
+        return command_matches_wechat_runtime(command);
+    };
+    if command.contains(executable_path) {
+        return true;
+    }
+    run_state.runtime_pid == Some(pid) && command_matches_managed_runtime(command, executable_path)
+}
+
+fn command_matches_managed_runtime(command: &str, executable_path: &str) -> bool {
+    let Some((managed_app_root, _)) = executable_path.split_once("/Contents/MacOS/") else {
+        return false;
+    };
+    command.contains(managed_app_root)
+        && command.contains("WeChatAppEx.app/Contents/MacOS/WeChatAppEx")
+}
+
+fn command_matches_wechat_runtime(command: &str) -> bool {
+    command.contains("WeChat.app/Contents/MacOS/WeChat")
+        || command.contains("WeChatAppEx.app/Contents/MacOS/WeChatAppEx")
+}
+
+fn process_command_line(pid: u32) -> Option<String> {
+    let output = ProcessCommand::new("/bin/ps")
+        .arg("-p")
+        .arg(pid.to_string())
+        .arg("-o")
+        .arg("command=")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let command = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if command.is_empty() {
+        None
+    } else {
+        Some(command)
+    }
 }
 
 fn preferred_run_state_pid(run_state: &RunState) -> u32 {
@@ -1469,6 +1533,12 @@ fn default_adapter_manifest() -> AdapterManifest {
         build_target: "4.1.8".into(),
         arch: "arm64".into(),
         resolver_mode: "signature_scan".into(),
+        release_channel: Some("beta".into()),
+        primitive_resolution: Some(PrimitiveResolution {
+            profile: "unresolved".into(),
+            contacts: "unresolved".into(),
+            scan: "unresolved".into(),
+        }),
         executable_name: "WeChat".into(),
         adapter_name: "wechat_4_1_8_arm64".into(),
         scan_status_codes: Default::default(),
@@ -1516,10 +1586,13 @@ fn classify_error_code(error: &anyhow::Error) -> &'static str {
     if message.contains("request_too_large") {
         return "request_too_large";
     }
-    if message.contains("最近一次扫描结果不是生产结果") {
+    if message.contains("最近一次扫描结果不是生产结果")
+        || message.contains("最近一次扫描结果不是正式链路结果")
+    {
         return "fixture_export_forbidden";
     }
-    if message.contains("未找到生产扫描结果") {
+    if message.contains("未找到生产扫描结果") || message.contains("未找到正式链路扫描结果")
+    {
         return "production_scan_missing";
     }
     if message.contains("adapter_not_loaded") {
@@ -1623,6 +1696,69 @@ mod tests {
     }
 
     #[test]
+    fn unresolved_primitives_are_release_blockers() {
+        let target_status = TargetStatus {
+            target_version: "4.1.8".into(),
+            bundle_id: Some("com.tencent.xinWeChat".into()),
+            source_version: Some("4.1.8".into()),
+            managed_version: Some("4.1.8".into()),
+            arch: "arm64".into(),
+            version_match: true,
+            target_supported: true,
+            adapter_name: "wechat_4_1_8_arm64".into(),
+            reason: None,
+        };
+        let agent_status = AgentStatus {
+            connected: true,
+            mode: "single-version-adapter".into(),
+            bundle_id: Some("com.tencent.xinWeChat".into()),
+            bundle_version: Some("4.1.8".into()),
+            adapter_loaded: true,
+            target_supported: true,
+            adapter_name: Some("wechat_4_1_8_arm64".into()),
+            reason: None,
+            runtime_ready: false,
+            fixture_enabled: false,
+            primitive_resolution: Some(PrimitiveResolution {
+                profile: "unresolved".into(),
+                contacts: "unresolved".into(),
+                scan: "unresolved".into(),
+            }),
+        };
+        let blockers = collect_release_blockers(&target_status, Some(&agent_status));
+        assert!(blockers.iter().any(|item| item.contains("profile 未就绪")));
+        assert!(blockers.iter().any(|item| item.contains("contacts 未就绪")));
+        assert!(blockers.iter().any(|item| item.contains("scan 未就绪")));
+    }
+
+    #[test]
+    fn runtime_pid_matches_managed_child_process() {
+        let run_state = RunState {
+            pid: 100,
+            runtime_pid: Some(200),
+            executable_path: Some(
+                "/Users/test/Library/Application Support/MacFriends/runtime/WeChat.app/Contents/MacOS/WeChat"
+                    .into(),
+            ),
+            started_at: Utc::now(),
+            socket_path: "/tmp/macfriends-test/agent.sock".into(),
+            adapter_name: "wechat_4_1_8_arm64".into(),
+            target_version: "4.1.8".into(),
+            agent_attached: false,
+        };
+        assert!(run_state_command_matches(
+            &run_state,
+            200,
+            "/Users/test/Library/Application Support/MacFriends/runtime/WeChat.app/Contents/Frameworks/WeChatAppEx.app/Contents/MacOS/WeChatAppEx"
+        ));
+        assert!(!run_state_command_matches(
+            &run_state,
+            200,
+            "/Applications/WeChat.app/Contents/Frameworks/WeChatAppEx.app/Contents/MacOS/WeChatAppEx"
+        ));
+    }
+
+    #[test]
     fn classify_known_error_codes() {
         assert_eq!(
             classify_error_code(&anyhow!("scan_primitive_unresolved")),
@@ -1637,7 +1773,7 @@ mod tests {
             "agent_unreachable"
         );
         assert_eq!(
-            classify_error_code(&anyhow!("最近一次扫描结果不是生产结果，拒绝导出")),
+            classify_error_code(&anyhow!("最近一次扫描结果不是正式链路结果，拒绝导出")),
             "fixture_export_forbidden"
         );
     }

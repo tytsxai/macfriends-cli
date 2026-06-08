@@ -208,6 +208,10 @@ pub struct AdapterManifest {
     pub build_target: String,
     pub arch: String,
     pub resolver_mode: String,
+    #[serde(default)]
+    pub release_channel: Option<String>,
+    #[serde(default)]
+    pub primitive_resolution: Option<PrimitiveResolution>,
     pub executable_name: String,
     pub adapter_name: String,
     pub scan_status_codes: BTreeMap<String, String>,
@@ -231,6 +235,8 @@ pub struct RunState {
     pub pid: u32,
     #[serde(default)]
     pub runtime_pid: Option<u32>,
+    #[serde(default)]
+    pub executable_path: Option<String>,
     pub started_at: DateTime<Utc>,
     pub socket_path: String,
     pub adapter_name: String,

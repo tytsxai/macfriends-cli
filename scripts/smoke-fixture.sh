@@ -133,7 +133,18 @@ if ! /usr/bin/grep -q "MacFriends 本地控制台" "$WORK_DIR/web-index.html"; t
   echo "Web index is not Chinese-first" >&2
   exit 1
 fi
-/usr/bin/curl -fsS -X OPTIONS "$WEB_URL/api/status" > "$WORK_DIR/web-options.txt"
+WEB_TOKEN="$(sed -n 's/.*const csrfToken = "\([^"]*\)";.*/\1/p' "$WORK_DIR/web-index.html" | head -1)"
+if [ -z "$WEB_TOKEN" ] || [ "$WEB_TOKEN" = "__MACFRIENDS_TOKEN__" ]; then
+  echo "Web console token was not injected" >&2
+  exit 1
+fi
+WEB_OPTIONS_STATUS="$(/usr/bin/curl -sS -o "$WORK_DIR/web-options.json" -w '%{http_code}' -X OPTIONS "$WEB_URL/api/status")"
+if [ "$WEB_OPTIONS_STATUS" != "403" ]; then
+  echo "Web OPTIONS returned unexpected HTTP $WEB_OPTIONS_STATUS" >&2
+  cat "$WORK_DIR/web-options.json" >&2
+  exit 1
+fi
+assert_json "$WORK_DIR/web-options.json" 'data["error_code"] == "web_csrf_required"'
 /usr/bin/curl -fsS "$WEB_URL/api/status" > "$WORK_DIR/web-status.json"
 assert_json "$WORK_DIR/web-status.json" 'data["ok"] is True'
 assert_json "$WORK_DIR/web-status.json" 'data["data"]["fixture_enabled"] is True'
@@ -153,17 +164,24 @@ assert_json "$WORK_DIR/web-contacts.json" 'data["ok"] is True'
 assert_json "$WORK_DIR/web-cli-log.json" 'data["ok"] is True'
 /usr/bin/curl -fsS "$WEB_URL/api/logs?kind=agent&lines=20" > "$WORK_DIR/web-agent-log.json"
 assert_json "$WORK_DIR/web-agent-log.json" 'data["ok"] is True'
-/usr/bin/curl -fsS -X POST -H 'content-type: application/json' -d '{"all":true}' "$WEB_URL/api/scan" > "$WORK_DIR/web-scan.json"
+WEB_SCAN_NO_TOKEN_STATUS="$(/usr/bin/curl -sS -o "$WORK_DIR/web-scan-no-token.json" -w '%{http_code}' -X POST -H 'content-type: application/json' -d '{"all":true}' "$WEB_URL/api/scan")"
+if [ "$WEB_SCAN_NO_TOKEN_STATUS" != "403" ]; then
+  echo "Web scan without token returned unexpected HTTP $WEB_SCAN_NO_TOKEN_STATUS" >&2
+  cat "$WORK_DIR/web-scan-no-token.json" >&2
+  exit 1
+fi
+assert_json "$WORK_DIR/web-scan-no-token.json" 'data["error_code"] == "web_csrf_required"'
+/usr/bin/curl -fsS -X POST -H 'content-type: application/json' -H "x-macfriends-token: $WEB_TOKEN" -d '{"all":true}' "$WEB_URL/api/scan" > "$WORK_DIR/web-scan.json"
 assert_json "$WORK_DIR/web-scan.json" 'data["ok"] is True'
 assert_json "$WORK_DIR/web-scan.json" 'data["data"]["mode"] == "fixture"'
-WEB_EXPORT_STATUS="$(/usr/bin/curl -sS -o "$WORK_DIR/web-export.json" -w '%{http_code}' -X POST -H 'content-type: application/json' -d '{"format":"csv"}' "$WEB_URL/api/export")"
+WEB_EXPORT_STATUS="$(/usr/bin/curl -sS -o "$WORK_DIR/web-export.json" -w '%{http_code}' -X POST -H 'content-type: application/json' -H "x-macfriends-token: $WEB_TOKEN" -d '{"format":"csv","output":"/tmp/ignored.csv"}' "$WEB_URL/api/export")"
 if [ "$WEB_EXPORT_STATUS" != "409" ]; then
   echo "Fixture web export returned unexpected HTTP $WEB_EXPORT_STATUS" >&2
   cat "$WORK_DIR/web-export.json" >&2
   exit 1
 fi
 assert_json "$WORK_DIR/web-export.json" 'data["ok"] is False'
-WEB_PREPARE_STATUS="$(/usr/bin/curl -sS -o "$WORK_DIR/web-prepare.json" -w '%{http_code}' -X POST -H 'content-type: application/json' -d '{"source_app":"/definitely/missing/WeChat.app"}' "$WEB_URL/api/prepare")"
+WEB_PREPARE_STATUS="$(/usr/bin/curl -sS -o "$WORK_DIR/web-prepare.json" -w '%{http_code}' -X POST -H 'content-type: application/json' -H "x-macfriends-token: $WEB_TOKEN" -d '{"source_app":"/definitely/missing/WeChat.app"}' "$WEB_URL/api/prepare")"
 if [ "$WEB_PREPARE_STATUS" != "409" ]; then
   echo "Web prepare with missing source returned unexpected HTTP $WEB_PREPARE_STATUS" >&2
   cat "$WORK_DIR/web-prepare.json" >&2

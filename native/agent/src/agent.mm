@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <sys/stat.h>
 #include <string.h>
 #include <unistd.h>
 #include <thread>
@@ -92,8 +93,13 @@ static bool ensureSocketDirectory(void) {
     BOOL ok = [[NSFileManager defaultManager] createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:nil error:&error];
     if (!ok) {
         logLine([NSString stringWithFormat:@"socket directory create failed: %@", error.localizedDescription ?: @"unknown"]);
+        return false;
     }
-    return ok;
+    if (chmod(directory.fileSystemRepresentation, 0700) != 0) {
+        logErrno(@"socket directory chmod failed");
+        return false;
+    }
+    return true;
 }
 
 static void debugDumpRuntimeMatches(void) {
