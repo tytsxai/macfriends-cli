@@ -32,7 +32,7 @@ Not a fit for:
 - Local Objective-C++ agent over Unix Domain Socket JSON RPC.
 - Local web console: `macfriends serve --open`, listening on `127.0.0.1:8765` by default.
 - Script-friendly `--json` success and failure output.
-- JSON/CSV export for the latest production scan.
+- JSON/CSV export for the latest real-runtime scan.
 - Readiness gates: `runtime_ready`, `fixture_enabled`, `release_blockers`, and `primitive_resolution`.
 - Stable error codes such as `version_mismatch`, `adapter_not_loaded`, `profile_primitive_unresolved`, `contacts_primitive_unresolved`, `scan_primitive_unresolved`, and `rpc_timeout`.
 
@@ -46,6 +46,7 @@ Important limits:
 - Current adapter is locked to `WeChat 4.1.8`, bundle id `com.tencent.xinWeChat`, `arm64`, and `signature_scan`.
 - The production attach point is `WeChatAppEx 2.4.1.19024`.
 - In the current source, unresolved private primitives fail conservatively with `profile_primitive_unresolved`, `contacts_primitive_unresolved`, or `scan_primitive_unresolved`. Do not treat those as production-ready scan results.
+- The current adapter manifest is marked `release_channel=beta`. By default, `make ready` and `make package` are blocked by the release guard until real primitives are resolved. Use `MACFRIENDS_ALLOW_BETA_RELEASE=1` only when intentionally producing a beta/testable artifact.
 - Fixture mode is for testing and CI only.
 - This repository does not distribute WeChat installers and does not automatically track the latest WeChat release.
 
@@ -76,8 +77,10 @@ macfriends serve --open
 Package:
 
 ```bash
-make package
+MACFRIENDS_ALLOW_BETA_RELEASE=1 make package
 ```
+
+The current adapter is still beta-only. Without `MACFRIENDS_ALLOW_BETA_RELEASE=1`, the release guard blocks package generation so the artifact is not mistaken for a production-ready release.
 
 See [docs/install.md](docs/install.md), [docs/operations.md](docs/operations.md), and [docs/README.md](docs/README.md) for the full workflow.
 
@@ -116,7 +119,7 @@ primitive_resolution.contacts = resolved
 primitive_resolution.scan = resolved
 ```
 
-If `primitive_resolution` is `unresolved`, `blocked`, or `fixture`, the project may be buildable and testable, but it is not ready for real production scanning.
+If `primitive_resolution` is `unresolved`, `blocked`, or `fixture`, the project may be buildable and testable, but it is not ready for real production scanning. The default release path enforces this: `make ready` and packaging fail unless `MACFRIENDS_ALLOW_BETA_RELEASE=1` is set for an explicit beta artifact.
 
 ## Local Web Console
 
@@ -142,9 +145,13 @@ The web console calls the same `macfriends --json` backend, so it does not bypas
 - [docs/README.md](docs/README.md): Documentation map and reader paths.
 - [docs/中文用户指南.md](docs/中文用户指南.md): Chinese user workflow.
 - [docs/install.md](docs/install.md): Installation and package layout.
+- [docs/deployment.md](docs/deployment.md): Local source deployment, beta packages, container checks, and server boundaries.
+- [docs/configuration.md](docs/configuration.md): Paths, environment variables, adapter manifest, state files, and retention.
 - [docs/operations.md](docs/operations.md): Release, rollback, backup, diagnostics.
 - [docs/compatibility.md](docs/compatibility.md): WeChat version and adapter boundary.
 - [docs/architecture.md](docs/architecture.md): CLI, agent, controlled copy, web console, readiness design.
+- [docs/modules.md](docs/modules.md): File-level module ownership, core logic, and adapter extension path.
+- [docs/troubleshooting.md](docs/troubleshooting.md): Common errors, error codes, and remediation.
 - [llms.txt](llms.txt): LLM and AI-search-friendly project summary.
 
 ## GitHub Topics Suggestion

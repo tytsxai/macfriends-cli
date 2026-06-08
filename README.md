@@ -30,10 +30,10 @@ MacFriends 是一个面向 **macOS Apple Silicon** 的本地微信好友关系�
 - **本地 agent 与 IPC**: Objective-C++ agent 通过 Unix Domain Socket 提供本地 JSON RPC。
 - **本地 Web 控制台**: `macfriends serve --open` / `macfriends 控制台 --open` 启动只监听 `127.0.0.1` 的中文控制台。
 - **结构化输出**: 支持 `--json`，成功和失败都返回可脚本处理的结构。
-- **结果导出**: 最近一次生产扫描可导出 JSON 或 CSV，CSV 会中和疑似表格公式字段。
+- **结果导出**: 最近一次正式链路扫描可导出 JSON 或 CSV，CSV 会中和疑似表格公式字段。
 - **运维门禁**: `runtime_ready`, `fixture_enabled`, `release_blockers`, `primitive_resolution` 明确区分可用、测试和阻塞状态。
 - **固定错误码**: `version_mismatch`, `adapter_not_loaded`, `profile_primitive_unresolved`, `contacts_primitive_unresolved`, `scan_primitive_unresolved`, `rpc_timeout` 等。
-- **可打包安装**: `make install-local`, `make package`, `scripts/install.sh` 支持本地安装、发布包安装和上一版本备份。
+- **可打包安装**: `make install-local`, `make package`, `scripts/install.sh` 支持本地安装、beta 包安装和上一版本备份；当前原语未 resolved 时打包必须显式 opt-in。
 
 ## 技术栈 / Tech Stack
 
@@ -55,6 +55,7 @@ MacFriends 是一个面向 **macOS Apple Silicon** 的本地微信好友关系�
 - 当前 adapter 锁定 **WeChat `4.1.8` + `com.tencent.xinWeChat` + `arm64` + `signature_scan`**。
 - 生产运行态实际附着点是 **WeChatAppEx `2.4.1.19024`**。
 - 当前源码中的真实私有原语解析仍以 `primitive_resolution=unresolved` 作为安全失败状态；看到 `profile_primitive_unresolved` / `contacts_primitive_unresolved` / `scan_primitive_unresolved` 时，不要把结果当成生产可用。
+- 当前 adapter manifest 标记为 `release_channel=beta`。默认 `make ready` / `make package` 会被 release guard 阻止，除非你明确设置 `MACFRIENDS_ALLOW_BETA_RELEASE=1` 构建 beta/testable artifact。
 - fixture 模式仅用于测试和 CI，不代表真实微信扫描结果。
 - 本项目不分发 WeChat 安装包，也不会自动跟进最新版微信。
 
@@ -94,10 +95,10 @@ macfriends 导出 --format csv
 macfriends 控制台 --open
 ```
 
-发布包：
+beta 打包：
 
 ```bash
-make package
+MACFRIENDS_ALLOW_BETA_RELEASE=1 make package
 ```
 
 输出示例：
@@ -106,6 +107,8 @@ make package
 dist/macfriends-0.1.2-macos-arm64.tar.gz
 dist/macfriends-0.1.2-macos-arm64.tar.gz.sha256
 ```
+
+当前 adapter 仍是 beta 通道；不带 `MACFRIENDS_ALLOW_BETA_RELEASE=1` 时，发布门禁会阻止生成看起来像生产可用的包。
 
 安装和发布细节见 [docs/install.md](docs/install.md) 与 [docs/operations.md](docs/operations.md)。
 
@@ -140,7 +143,7 @@ macfriends serve [--addr 127.0.0.1:8765] [--open]
 - 生命周期：`not_prepared` / `prepared` / `running_blocked` / `ready`
 - 本机微信版本、受控副本版本、adapter 锁定版本和兼容提示
 - agent socket、PID、fixture 状态、Ready 状态和 release blockers
-- 最近一次生产扫描与 fixture 扫描摘要
+- 最近一次正式链路扫描与 fixture 扫描摘要
 - 结果目录、CLI 日志、agent 日志、socket 路径
 - 下一步动作建议
 
@@ -180,17 +183,30 @@ primitive_resolution.scan = resolved
 
 只要 `primitive_resolution` 仍是 `unresolved`、`blocked` 或 `fixture`，都不能把扫描结果当成真实生产结果。
 
-发布前建议执行：
+当前源码的真实原语仍未 resolved，因此默认发布门禁会拒绝生成看起来像正式版的产物：
 
 ```bash
 make ready
+make package
+```
+
+如果你明确要生成 beta/testable artifact，必须显式 opt-in：
+
+```bash
+MACFRIENDS_ALLOW_BETA_RELEASE=1 make ready
+MACFRIENDS_ALLOW_BETA_RELEASE=1 make package
+```
+
+真实生产发布前还需要执行：
+
+```bash
 cargo run -p macfriends -- doctor --json
 cargo run -p macfriends -- status --json
 cargo run -p macfriends -- launch --login --json
 cargo run -p macfriends -- attach --json
 ```
 
-`make ready` 会执行格式检查、clippy、测试、构建、native agent 构建、fixture smoke 和打包。
+`make ready` 会先执行 release guard；通过后再执行格式检查、clippy、测试、构建、native agent 构建、fixture smoke 和打包。
 
 ## 本地 Web 控制台 / Local Web Console
 
@@ -207,6 +223,8 @@ http://127.0.0.1:8765
 ```
 
 Web 控制台调用同一个 `macfriends --json` 后端，不维护第二套业务逻辑。常用接口包括：
+
+写操作会由控制台页面自动携带本次 `serve` 会话 token；没有 token 的跨站 `POST` 会被拒绝。Web 导出固定写入默认结果目录，如需自定义路径请使用 CLI `macfriends export --output`。
 
 - `GET /api/status`
 - `GET /api/compatibility`
@@ -239,9 +257,12 @@ Web 控制台调用同一个 `macfriends --json` 后端，不维护第二套业�
 - [docs/README.md](docs/README.md): 文档导航和读者路径。
 - [docs/中文用户指南.md](docs/中文用户指南.md): 中文用户从控制台到 CLI 的完整路径。
 - [docs/install.md](docs/install.md): 安装、打包、发布包结构。
+- [docs/deployment.md](docs/deployment.md): 本地源码、beta 包、容器验证和服务器边界。
+- [docs/configuration.md](docs/configuration.md): 路径、环境变量、adapter manifest、状态文件和保留策略。
 - [docs/operations.md](docs/operations.md): 发布前检查、回滚、备份、诊断。
 - [docs/compatibility.md](docs/compatibility.md): 版本兼容矩阵与 adapter 边界。
 - [docs/architecture.md](docs/architecture.md): Rust CLI、native agent、Web 控制台和 Ready 门禁架构。
+- [docs/modules.md](docs/modules.md): 文件级模块职责、核心逻辑和 adapter 扩展路径。
 - [docs/troubleshooting.md](docs/troubleshooting.md): 常见失败、错误码和排障路径。
 - [llms.txt](llms.txt): 给 AI 搜索引擎、LLM crawler 和引用系统使用的项目摘要。
 

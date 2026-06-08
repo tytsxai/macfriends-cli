@@ -29,7 +29,7 @@ MacFriends provides a local command-line and local web-console workflow for insp
 - launch the controlled copy with `launch --login`
 - attach to the local agent with `attach`
 - call local primitives through `profile`, `contacts`, and `scan`
-- export the latest production scan as JSON or CSV with `export`
+- export the latest real-runtime scan as JSON or CSV with `export`
 - stop and clean runtime state with `detach` and `cleanup`
 - serve a local web console and HTTP API with `serve`
 
@@ -98,13 +98,13 @@ macfriends serve --open
 Package:
 
 ```bash
-make package
+MACFRIENDS_ALLOW_BETA_RELEASE=1 make package
 ```
 
 Release readiness check:
 
 ```bash
-make ready
+MACFRIENDS_ALLOW_BETA_RELEASE=1 make ready
 cargo run -p macfriends -- doctor --json
 cargo run -p macfriends -- status --json
 cargo run -p macfriends -- launch --login --json
@@ -118,9 +118,12 @@ cargo run -p macfriends -- attach --json
 - `docs/README.md`: Documentation navigation and reader paths.
 - `docs/中文用户指南.md`: Chinese user guide for local console and CLI aliases.
 - `docs/install.md`: Installation, packaging, release artifacts, Ready verification.
+- `docs/deployment.md`: Local source deployment, beta package deployment, container/static validation, and server/headless boundaries.
+- `docs/configuration.md`: Runtime paths, environment variables, adapter manifest, generated state, retention, and Web console configuration.
 - `docs/operations.md`: Production checks, rollback, backup, logs, diagnostics.
 - `docs/compatibility.md`: WeChat version and adapter compatibility matrix.
 - `docs/architecture.md`: CLI, native agent, controlled copy, web console, readiness gate design.
+- `docs/modules.md`: File-level module map, core lifecycle logic, native agent behavior, packaging scripts, and adapter extension checklist.
 - `docs/troubleshooting.md`: Common errors and remediation.
 
 ## Useful search phrases

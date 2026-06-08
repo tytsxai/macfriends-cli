@@ -4,6 +4,12 @@
   "build_target": "4.1.8",
   "arch": "arm64",
   "resolver_mode": "signature_scan",
+  "release_channel": "beta",
+  "primitive_resolution": {
+    "profile": "unresolved",
+    "contacts": "unresolved",
+    "scan": "unresolved"
+  },
   "executable_name": "WeChat",
   "adapter_name": "wechat_4_1_8_arm64",
   "scan_status_codes": {

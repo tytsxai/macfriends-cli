@@ -13,6 +13,7 @@ package:
 	./scripts/package.sh
 
 ready:
+	./scripts/release-guard.sh
 	cargo fmt --check
 	cargo clippy --all-targets --all-features -- -D warnings
 	cargo test

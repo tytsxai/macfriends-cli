@@ -6,6 +6,8 @@ VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT_DIR/crates/cli/Cargo.toml"
 PACKAGE_NAME="macfriends-${VERSION}-macos-arm64"
 DIST_DIR="$ROOT_DIR/dist/$PACKAGE_NAME"
 
+"$ROOT_DIR/scripts/release-guard.sh"
+
 rm -rf "$DIST_DIR"
 mkdir -p "$DIST_DIR/bin" "$DIST_DIR/bundle/bin" "$DIST_DIR/docs"
 
@@ -31,3 +33,4 @@ cp -R "$ROOT_DIR/docs/." "$DIST_DIR/docs/"
 )
 
 echo "Packaged: $ROOT_DIR/dist/$PACKAGE_NAME.tar.gz"
+echo "Release guard completed; see guard output above for adapter channel and readiness."

@@ -2,7 +2,15 @@
 
 ## Unreleased
 
-暂无。
+### Added
+- Release guard for `make ready` and package generation. Current unresolved adapter primitives now block production-looking artifacts unless `MACFRIENDS_ALLOW_BETA_RELEASE=1` explicitly opts into a beta/testable package.
+
+### Changed
+- Adapter metadata now records `release_channel=beta` and current primitive resolution state.
+- CLI, Web, README, install, operations, and llms wording now distinguish beta/testable artifacts from real runtime readiness.
+
+### Security
+- Web write operations now require a per-server session token, broad CORS headers were removed, Web export ignores caller-controlled output paths, run-state PID checks verify process identity, and the native agent socket directory is forced to `0700`.
 
 ## 0.1.2 - 2026-05-25
 
@@ -13,6 +21,8 @@
 - Chinese user guide at `docs/中文用户指南.md`.
 - Runtime compatibility warnings for installed WeChat version, managed copy version, and locked adapter version.
 - `/api/compatibility` and CORS preflight handling for the local Web API.
+- `llms.txt` AI-search-engine index covering positioning, limits, common questions, and bilingual long-tail search phrases.
+- README keyword block, English summary, release badge, navigation links, and FAQ clarifying the controlled-copy model and compatibility rails.
 
 ### Changed
 - `scripts/install.sh` now supports both source-tree installation and direct installation from an extracted release package.

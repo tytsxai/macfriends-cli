@@ -45,7 +45,7 @@ pub enum Command {
     Contacts,
     #[command(visible_alias = "扫描", about = "扫描联系人关系并保存结果")]
     Scan(ScanArgs),
-    #[command(visible_alias = "导出", about = "导出最近一次生产扫描结果")]
+    #[command(visible_alias = "导出", about = "导出最近一次正式链路扫描结果")]
     Export(ExportArgs),
     #[command(visible_alias = "断开", about = "请求 agent 停止并断开连接")]
     Detach,
