@@ -37,5 +37,14 @@ jobs:
       - name: Fixture smoke
         run: ./scripts/smoke-fixture.sh
 
-      - name: Package
+      - name: Release guard blocks production packaging by default
+        run: |
+          if ./scripts/release-guard.sh; then
+            echo "Expected release guard to block unresolved/beta adapters without opt-in" >&2
+            exit 1
+          fi
+
+      - name: Package beta artifact
+        env:
+          MACFRIENDS_ALLOW_BETA_RELEASE: "1"
         run: ./scripts/package.sh
