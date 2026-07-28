@@ -6,7 +6,11 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::Duration;
 
-const RPC_IO_TIMEOUT: Duration = Duration::from_secs(3);
+/// Default RPC I/O timeout for lightweight methods such as `status` / `stop`.
+const RPC_IO_TIMEOUT: Duration = Duration::from_secs(5);
+/// Heavier methods (`contacts` / `scan`) may return large JSON payloads once real
+/// primitives are resolved; keep them from flapping under normal load.
+const RPC_HEAVY_IO_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Serialize)]
 struct RpcRequest<'a> {
@@ -24,10 +28,11 @@ struct RpcResponse<T> {
 }
 
 pub fn call<T: DeserializeOwned>(socket_path: &Path, method: &str, params: Value) -> Result<T> {
+    let timeout = rpc_timeout_for_method(method);
     let mut stream = UnixStream::connect(socket_path)
         .with_context(|| format!("无法连接 agent socket: {}", socket_path.display()))?;
-    stream.set_read_timeout(Some(RPC_IO_TIMEOUT))?;
-    stream.set_write_timeout(Some(RPC_IO_TIMEOUT))?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(timeout))?;
     let request = RpcRequest {
         id: "macfriends-cli",
         method,
@@ -40,7 +45,15 @@ pub fn call<T: DeserializeOwned>(socket_path: &Path, method: &str, params: Value
 
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
-    reader.read_line(&mut line)?;
+    reader.read_line(&mut line).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::TimedOut
+            || error.kind() == std::io::ErrorKind::WouldBlock
+        {
+            anyhow!("rpc_timeout: agent 在 {timeout:?} 内未完成 method={method}")
+        } else {
+            anyhow!(error).context(format!("读取 agent 响应失败: method={method}"))
+        }
+    })?;
     if line.trim().is_empty() {
         return Err(anyhow!("agent 返回了空响应"));
     }
@@ -56,6 +69,13 @@ pub fn call<T: DeserializeOwned>(socket_path: &Path, method: &str, params: Value
                 .error
                 .unwrap_or_else(|| "未知 agent 错误".to_string())
         ))
+    }
+}
+
+fn rpc_timeout_for_method(method: &str) -> Duration {
+    match method {
+        "contacts" | "scan" => RPC_HEAVY_IO_TIMEOUT,
+        _ => RPC_IO_TIMEOUT,
     }
 }
 
