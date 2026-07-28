@@ -61,15 +61,15 @@ MACFRIENDS_ALLOW_BETA_RELEASE=1 make package
 输出：
 
 ```text
-dist/macfriends-0.1.2-macos-arm64.tar.gz
-dist/macfriends-0.1.2-macos-arm64.tar.gz.sha256
+dist/macfriends-0.1.3-macos-arm64.tar.gz
+dist/macfriends-0.1.3-macos-arm64.tar.gz.sha256
 ```
 
 在目标机器上：
 
 ```bash
-tar -xzf macfriends-0.1.2-macos-arm64.tar.gz
-cd macfriends-0.1.2-macos-arm64
+tar -xzf macfriends-0.1.3-macos-arm64.tar.gz
+cd macfriends-0.1.3-macos-arm64
 ./install.sh
 macfriends doctor --json
 macfriends status --json

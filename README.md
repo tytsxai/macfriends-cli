@@ -104,8 +104,8 @@ MACFRIENDS_ALLOW_BETA_RELEASE=1 make package
 输出示例：
 
 ```text
-dist/macfriends-0.1.2-macos-arm64.tar.gz
-dist/macfriends-0.1.2-macos-arm64.tar.gz.sha256
+dist/macfriends-0.1.3-macos-arm64.tar.gz
+dist/macfriends-0.1.3-macos-arm64.tar.gz.sha256
 ```
 
 当前 adapter 仍是 beta 通道；不带 `MACFRIENDS_ALLOW_BETA_RELEASE=1` 时，发布门禁会阻止生成看起来像生产可用的包。

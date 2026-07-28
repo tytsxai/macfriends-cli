@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+暂无。
+
+## 0.1.3 - 2026-07-28
+
 ### Added
 - Release guard for `make ready` and package generation. Current unresolved adapter primitives now block production-looking artifacts unless `MACFRIENDS_ALLOW_BETA_RELEASE=1` explicitly opts into a beta/testable package.
 - `scripts/backup.sh` for cold-backup of runtime/results/bundle/logs (and agent log when present).
@@ -17,6 +21,9 @@
 ### Security
 - Web write operations now require a per-server session token, broad CORS headers were removed, Web export ignores caller-controlled output paths, run-state PID checks verify process identity, and the native agent socket directory is forced to `0700`.
 - Sensitive runtime/result/log files are written owner-private (`0600`); agent socket and agent log are also forced to `0600`.
+
+### Notes
+- This remains a **beta** release: real WeChat private primitives are still `unresolved`. Use beta packages only with explicit opt-in; do not present as production-ready friend scanning.
 
 ## 0.1.2 - 2026-05-25
 
