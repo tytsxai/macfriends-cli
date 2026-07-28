@@ -116,6 +116,17 @@ Web 后端复用当前二进制执行 `macfriends --json <command>`，所以不�
 - 正式扫描历史保留最近 100 份，fixture 历史保留最近 20 份。
 - CSV 导出会中和以 `=`, `+`, `-`, `@` 开头的单元格，降低表格公式注入风险。
 
+## 权限与超时基线
+
+| 对象 | 策略 | 说明 |
+| --- | --- | --- |
+| 数据根目录 / runtime / results / logs / ipc | 目录 `0700` | CLI `create_private_dir`；agent 对 socket 父目录强制 `0700` |
+| 状态文件、扫描结果、导出文件 | 文件 `0600` | `write_bytes_atomic` 写入后设 owner-private |
+| CLI / agent 日志文件 | 文件 `0600` | 新建日志时设为 owner-private |
+| agent socket | 文件 `0600` | bind 成功后 chmod，避免同机其他用户连接 |
+| RPC 轻量方法（status/profile/stop 等） | 5s 读写超时 | 超时映射为 `rpc_timeout` |
+| RPC 重操作（contacts/scan） | 60s 读写超时 | 为真实全量扫描预留；仍超时则返回 `rpc_timeout` |
+
 ## 配置变更维护规则
 
 凡是改动以下内容，必须同步更新本文档和相关用户文档：

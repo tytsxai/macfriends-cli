@@ -99,7 +99,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 - native Objective-C++ agent 的完整 macOS 运行验证。
 - Web 控制台真实扫描，因为它最终仍调用本机 CLI 和 agent。
 
-如果 CI 运行在 macOS runner，可以执行 `make ready` 的更多步骤；但当前 beta adapter 仍需要 `MACFRIENDS_ALLOW_BETA_RELEASE=1` 才能通过打包门禁。
+如果 CI 运行在 macOS runner，可以执行 `make ready` 的更多步骤；但当前 beta adapter 仍需要 `MACFRIENDS_ALLOW_BETA_RELEASE=1` 才能通过打包门禁。GitHub Actions 会显式验证“默认 release guard 拦截”，再以 beta opt-in 生成校验包，避免 CI 静默把 unresolved 产物当成生产包。
 
 ## 服务器部署边界
 

@@ -4,13 +4,19 @@
 
 ### Added
 - Release guard for `make ready` and package generation. Current unresolved adapter primitives now block production-looking artifacts unless `MACFRIENDS_ALLOW_BETA_RELEASE=1` explicitly opts into a beta/testable package.
+- `scripts/backup.sh` for cold-backup of runtime/results/bundle/logs (and agent log when present).
+- `rust-toolchain.toml` pins stable + rustfmt/clippy for reproducible CI/local builds.
+- Operations Go/No-Go checklist for honest production readiness decisions.
 
 ### Changed
 - Adapter metadata now records `release_channel=beta` and current primitive resolution state.
 - CLI, Web, README, install, operations, and llms wording now distinguish beta/testable artifacts from real runtime readiness.
+- CI now asserts default release-guard blocking, then packages only with `MACFRIENDS_ALLOW_BETA_RELEASE=1`.
+- RPC I/O timeouts: 5s for lightweight methods, 60s for `contacts`/`scan`; timed-out reads surface as `rpc_timeout`.
 
 ### Security
 - Web write operations now require a per-server session token, broad CORS headers were removed, Web export ignores caller-controlled output paths, run-state PID checks verify process identity, and the native agent socket directory is forced to `0700`.
+- Sensitive runtime/result/log files are written owner-private (`0600`); agent socket and agent log are also forced to `0600`.
 
 ## 0.1.2 - 2026-05-25
 

@@ -126,7 +126,21 @@ macfriends status --json
 
 ## 备份与恢复
 
-建议定期备份以下目录：
+建议在升级、改 adapter 或大改配置前做冷备份。优先先 `detach` / 退出受控 WeChat，再执行：
+
+```bash
+./scripts/backup.sh
+# 或指定目录
+./scripts/backup.sh /path/to/backup-root
+```
+
+脚本会把以下内容复制到 `~/Library/Application Support/MacFriends/backups/macfriends-backup-<UTC时间>/`：
+
+```text
+runtime/   results/   bundle/   logs/   （以及 /tmp 下的 agent.log，若存在）
+```
+
+也可手工备份同样目录：
 
 ```bash
 ~/Library/Application Support/MacFriends/runtime
@@ -140,6 +154,7 @@ macfriends status --json
 - `results/latest-fixture-scan.json` 仅用于测试，不参与正式导出。
 - `results/history/` 默认仅保留最近 100 份正式链路扫描；`results/fixture/` 默认仅保留最近 20 份 fixture 扫描。
 - 恢复后先运行 `status --json` 和 `doctor --json`，再运行 `launch` / `attach` 进行活体验证。
+- 敏感状态与扫描结果文件按 owner-private（`0600`）写入；恢复后若权限被放宽，建议重新 `chmod 600` 关键文件。
 
 运行目录约束：
 - `prepare` 前若发现受控进程或 agent 仍在运行，会直接失败，避免在活跃进程上覆盖运行资产。
@@ -169,6 +184,22 @@ beta/发行包内的 `install.sh` 支持直接从解压目录安装；源码仓�
 - `launch` 失败后：CLI 会尝试终止本次拉起的受控进程并回收 `run-state.json` / `wechat.pid` / `agent.sock`，随后可直接重试。
 - `fixture_enabled = true`：说明当前不是真实运行态，必须退出后重新以正式链路启动。
 - `runtime_ready = false` 且 `primitive_resolution` 为 `unresolved`：表示核心真实原语尚未闭环，项目仍不能作为真实扫描可用版本发布。
+
+## 上线 Go / No-Go
+
+在“马上生产上线并长期运行”场景下，按下面清单判定，不要只看编译通过。
+
+| 检查项 | Go 条件 | 当前默认状态 |
+| --- | --- | --- |
+| 真实原语 | `primitive_resolution.profile/contacts/scan = resolved` | **No-Go**：源码仍为 `unresolved` |
+| 运行态 | `runtime_ready=true` 且 `fixture_enabled=false` | **No-Go**（依赖上一项） |
+| 版本锁定 | 本机/受控 WeChat 与 adapter `build_target` 一致 | 取决于用户本机微信版本 |
+| 发布门禁 | 生产包不需 `MACFRIENDS_ALLOW_BETA_RELEASE` | **No-Go**：默认 release guard 拦截 |
+| 工程门禁 | `cargo test` / clippy / fixture smoke / CI 绿 | 工程链路可 Go |
+| 回滚 | `macfriends.previous` + `bundle.previous` 可用 | 安装脚本已支持 |
+| 备份 | 升级前有 results/runtime/bundle 备份 | `scripts/backup.sh` |
+
+**结论规则**：只要表中任一项为 No-Go，只能发 beta/testable 包或内部工程包，不能对外宣称“生产可用扫描工具”。
 
 ## 文档发布要求
 

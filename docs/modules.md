@@ -91,7 +91,7 @@ agent 通过 Objective-C `constructor` 在目标进程加载时启动。它会�
 1. 读取 `MACFRIENDS_ADAPTER_PATH`。
 2. 用 `MFBuildAdapterStatus` 判断当前进程是否应启动 agent server。
 3. 仅当 fixture 模式或目标 runtime 支持时启动 UDS server。
-4. 创建 socket 父目录并 chmod `0700`。
+4. 创建 socket 父目录并 chmod `0700`，socket 文件本身 chmod `0600`。
 5. 监听 `MACFRIENDS_AGENT_SOCKET`。
 6. 对每个请求调用 `MFHandleAdapterRequest`。
 
