@@ -1,4 +1,4 @@
-.PHONY: build agent test clean package install-local ready
+.PHONY: build agent test clean package install-local ready backup
 
 build:
 	cargo build
@@ -26,6 +26,9 @@ install-local:
 	cargo build --release
 	$(MAKE) -C native/agent artifacts
 	./scripts/install.sh
+
+backup:
+	./scripts/backup.sh
 
 clean:
 	cargo clean
