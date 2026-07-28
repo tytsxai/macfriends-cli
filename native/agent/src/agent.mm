@@ -59,11 +59,13 @@ static void logLine(NSString *message) {
     }
     if (![manager fileExistsAtPath:path]) {
         [data writeToFile:path atomically:YES];
+        chmod(path.fileSystemRepresentation, 0600);
         return;
     }
     NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
     if (!handle) {
         [data writeToFile:path atomically:YES];
+        chmod(path.fileSystemRepresentation, 0600);
         return;
     }
     @try {
@@ -288,10 +290,19 @@ static void serverLoop() {
         g_server_fd = -1;
         return;
     }
+    // Owner-only access: agent socket carries local profile/contacts/scan RPC.
+    if (chmod(g_socket_path, 0600) != 0) {
+        logErrno(@"socket chmod failed");
+        close(g_server_fd);
+        g_server_fd = -1;
+        unlink(g_socket_path);
+        return;
+    }
     if (listen(g_server_fd, 5) != 0) {
         logErrno(@"socket listen failed");
         close(g_server_fd);
         g_server_fd = -1;
+        unlink(g_socket_path);
         return;
     }
     g_running.store(true);

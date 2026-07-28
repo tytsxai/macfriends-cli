@@ -130,7 +130,7 @@ pub fn write_json_file<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 
 pub fn write_bytes_atomic(path: &Path, content: &[u8]) -> Result<()> {
     let parent = path.parent().context("目标目录非法")?;
-    std::fs::create_dir_all(parent)?;
+    create_private_dir(parent)?;
     let temp_path = parent.join(format!(
         ".{}.{}.tmp",
         path.file_name()
@@ -139,7 +139,9 @@ pub fn write_bytes_atomic(path: &Path, content: &[u8]) -> Result<()> {
         std::process::id()
     ));
     std::fs::write(&temp_path, content)?;
+    set_owner_private_file(&temp_path)?;
     std::fs::rename(&temp_path, path)?;
+    set_owner_private_file(path)?;
     Ok(())
 }
 
@@ -148,7 +150,21 @@ pub fn append_log(path: &Path, event: Value) -> Result<()> {
     create_private_dir(parent)?;
     rotate_file_if_needed(path, LOG_ROTATE_BYTES)?;
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+    // Always re-assert owner-private mode so rotated/restored logs do not stay group-readable.
+    set_owner_private_file(path)?;
     writeln!(file, "{}", serde_json::to_string(&event)?)?;
+    Ok(())
+}
+
+/// Restrict a file to owner read/write only (`0600`) on Unix.
+/// Sensitive runtime state, scan results, and logs should never be group/world readable.
+pub fn set_owner_private_file(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        let permissions = std::fs::Permissions::from_mode(0o600);
+        std::fs::set_permissions(path, permissions)?;
+    }
+    let _ = path;
     Ok(())
 }
 
@@ -272,5 +288,20 @@ mod tests {
         create_private_dir(&path).unwrap();
 
         assert!(path.exists());
+    }
+
+    #[test]
+    fn write_bytes_atomic_sets_owner_private_mode() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("state.json");
+
+        write_bytes_atomic(&path, br#"{"ok":true}"#).unwrap();
+
+        #[cfg(unix)]
+        {
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+        assert_eq!(std::fs::read(&path).unwrap(), br#"{"ok":true}"#);
     }
 }
