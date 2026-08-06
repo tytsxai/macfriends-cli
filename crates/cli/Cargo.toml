@@ -8,7 +8,19 @@ authors.workspace = true
 repository.workspace = true
 homepage = "https://github.com/tytsxai/macfriends-cli"
 readme = "../../README.md"
-keywords = ["wechat", "macos", "cli", "apple-silicon", "rust"]
+keywords = [
+    "wechat",
+    "weixin",
+    "macos",
+    "cli",
+    "apple-silicon",
+    "arm64",
+    "rust",
+    "friend-checker",
+    "contact-scan",
+    "local-first",
+    "wechat-friends",
+]
 categories = ["command-line-utilities"]
 
 [dependencies]
